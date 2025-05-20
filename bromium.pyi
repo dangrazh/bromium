@@ -165,6 +165,7 @@ class WinDriver:
     - get_curser_pos(self) -> tuple[int, int]: Returns the current cursor position as a tuple of (x, y) coordinates.
     - get_ui_element(self, x: int, y: int) -> Element: Returns the Windows UI Automation API UI Element of the window at the given coordinates.
     - get_screen_context(self) -> SreenContext: Returns the screen size and scale as a ScreenContext object.
+    - launch_or_activate_app(self, app_path: str, xpath: str) -> bool: Launches a new application or activates an existing window.
     """
     
     def __init__(self, timeout: int) -> None:
@@ -235,5 +236,23 @@ class WinDriver:
         
         Returns:
         - ScreenContext: The screen size and scale as a ScreenContext object.
+        """
+        pass
+
+    def launch_or_activate_app(self, app_path: str, xpath: str) -> bool:
+        """
+        Launch or activate an application using its path and an XPath.
+        
+        This method will:
+        1. Try to find and activate an existing window that matches the application name or XPath
+        2. If no matching window is found, launch the application from the provided path
+        3. Wait for the application window to appear and bring it to the foreground
+        
+        Parameters:
+        - app_path (str): Full path to the application executable
+        - xpath (str): XPath that identifies an element in the application window
+        
+        Returns:
+        - bool: True if the application was successfully launched or activated
         """
         pass

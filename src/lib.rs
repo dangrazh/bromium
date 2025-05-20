@@ -11,6 +11,7 @@ mod bindings;
 mod commons;
 mod uiauto;
 use pyo3::prelude::*;
+mod app_control;
 
 
 

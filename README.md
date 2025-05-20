@@ -38,6 +38,13 @@ screen_context = driver.get_screen_context()
 print(f"Screen width: {screen_context.get_screen_width()}")
 print(f"Screen height: {screen_context.get_screen_height()}")
 print(f"Screen scale: {screen_context.get_screen_scale()}")
+
+# Launch or activate an application
+app_path = r"C:\Windows\System32\calc.exe"
+xpath = r'/Window[@ClassName="ApplicationFrameWindow"][@Name="Calculator"]'
+success = driver.launch_or_activate_app(app_path, xpath)
+if success:
+    print("Calculator is now in focus")
 ```
 
 ## API Reference
@@ -52,6 +59,7 @@ The main class for interacting with Windows UI elements.
 - `get_ui_element(x: int, y: int) -> Element`: Get UI element at specified coordinates
 - `get_ui_element_by_xpath(xpath: str) -> Element`: Get UI element from an xpath
 - `get_screen_context() -> ScreenContext`: Get screen size and scaling information
+- `launch_or_activate_app() -> bool`: Launches a new application or activates an existing window
 
 ### Element
 

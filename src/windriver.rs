@@ -1,6 +1,7 @@
 use crate::context::ScreenContext;
 use crate::uiauto::{get_ui_element_by_runtimeid, get_ui_element_by_xpath, get_element_by_xpath};
 use crate::xpath::generate_xpath;
+use crate::app_control::launch_or_activate_application;
 
 #[allow(unused_imports)]
 use crate::commons::execute_with_timeout;
@@ -207,6 +208,19 @@ impl WinDriver {
     pub fn get_screen_context(&self) -> PyResult<ScreenContext> {
         let screen_context = ScreenContext::new();
         PyResult::Ok(screen_context)
+    }
+
+    /// Launch or activate an application using its path and an XPath
+    /// 
+    /// Args:
+    ///     app_path (str): Full path to the application executable
+    ///     xpath (str): XPath that identifies an element in the application window
+    /// 
+    /// Returns:
+    ///     bool: True if the application was successfully launched or activated
+    pub fn launch_or_activate_app(&self, app_path: String, xpath: String) -> PyResult<bool> {
+        let result = launch_or_activate_application(&app_path, &xpath);
+        PyResult::Ok(result)
     }
 }
 
