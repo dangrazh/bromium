@@ -176,7 +176,13 @@ impl XMLDomNode {
     }
 
     pub fn get_first_child(&self) -> Option<&XMLDomNode> {
-        self.children.first()
+        if let Some(first) = self.children.first() {
+            return Some(first);
+        } else {
+            // println!("Warning: No children found for node: {:?}", self);
+            return None;
+        }
+        // self.children.first()
     }
 }
 
@@ -202,7 +208,17 @@ impl XMLDomWriter {
         if let Some(ref root) = self.root {
             // special handling to eliminate duplicate root node from the XML output
             // take the frist child of the root instead of the root itself
-            Self::write_node(&mut writer, root.get_first_child().unwrap())?;
+            if let Some(ref first_child) = root.get_first_child() {
+                Self::write_node(&mut writer, first_child)?;
+            } else {
+                // write the root node itself, as there is no duplicate root node
+                // this is a special case and should not happen in normal usage
+                println!("Warning: Root node has no children, writing root node itself: {:?}", root);
+                Self::write_node(&mut writer, root)?;
+            }
+
+            // println!("Warning: Root node has no children, writing root node itself: {:?}", root);
+            // Self::write_node(&mut writer, root)?;
         }
         Ok(writer.get_xml_string())
     }

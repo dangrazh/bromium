@@ -281,7 +281,7 @@ impl WinDriver {
         let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
         thread::spawn(|| {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, None);
+            get_all_elements_xml(tx, None, None, None);
         });
         info!("Spawned separate thread to get ui tree");
         
@@ -450,7 +450,7 @@ impl WinDriver {
         let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
         thread::spawn(|| {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, None);
+            get_all_elements_xml(tx, None, None, None);
         });
         info!("Spawned separate thread to refresh ui tree");
         
@@ -463,7 +463,7 @@ impl WinDriver {
             *WINDRIVER.lock().unwrap() = Some(self.clone());
         }
 
-        info!("WinDriver successfully created");
+        info!("UITree successfully refreshed");
         PyResult::Ok(())
     }
 }

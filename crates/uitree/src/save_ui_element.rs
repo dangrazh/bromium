@@ -106,6 +106,28 @@ impl SaveUIElement {
 
 }
 
+
+impl Default for SaveUIElement {
+    fn default() -> Self {
+        SaveUIElement {
+            name: String::new(),
+            classname: String::new(),
+            control_type: String::new(),
+            localized_control_type: String::new(),
+            framework_id: String::new(),
+            runtime_id: Vec::new(),
+            automation_id: String::new(),
+            handle: 0,
+            bounding_rect: uiautomation::types::Rect::new(0, 0, 0, 0),
+            bounding_rect_size: 0,
+            level: 0,
+            z_order: 0,
+            xpath: None,
+        }
+    }
+}
+
+
 impl From<UIElement> for SaveUIElement {
     fn from(item: UIElement) -> Self {
 
@@ -159,7 +181,7 @@ impl TryFrom<&SaveUIElement> for UIElement {
 }
 
 // #[allow(dead_code)]
-fn get_ui_automation_instance() -> Option<UIAutomation> {
+pub fn get_ui_automation_instance() -> Option<UIAutomation> {
     debug!("Creating UIAutomation instance");
 
     let uia: UIAutomation;

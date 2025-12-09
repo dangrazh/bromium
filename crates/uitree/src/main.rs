@@ -12,8 +12,9 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::sync::mpsc::{Receiver, Sender};
 // use uitree::{UITree, get_all_elements};
-use uitree::{UITreeIter, get_all_elements_iterative};
-use uitree::{UITreeXML, get_all_elements_xml};
+// use uitree::{UITreeIter, get_all_elements_iterative};
+// use uitree::{UITreeXML, get_all_elements_xml};
+use uitree::{UITreeXML, get_all_elements_par_xml};
 
 struct FileWriter {
     // outfile_name: PathBuf,
@@ -82,12 +83,27 @@ fn main() {
     */
     
     
-    // XML Dom tree
+    // // XML Dom tree
+    // let (tx_xml, rx_xml): (Sender<_>, Receiver<UITreeXML>) = channel();
+    // printfmt!("Spawning separate thread to get ui tree in XML format");
+    // let start_xml = Instant::now();
+    // thread::spawn(move || {
+    //     get_all_elements_xml(tx_xml, None, None, None);
+    // });
+    // printfmt!("Spawned separate thread to get ui tree in XML format");
+    // let ui_tree_xml: UITreeXML = rx_xml.recv().unwrap();
+    // let elapsed_xml = start_xml.elapsed();
+    // printfmt!("Time taken to get ui tree in XML format: {:#?}", elapsed_xml);
+    // printfmt!("No of elemetns in UI Tree XML: {:#}", ui_tree_xml.get_elements().len());
+    // file_writer_xml.write(&ui_tree_xml.get_xml_dom_tree());
+    // // printfmt!("XML DOM tree: {}", xml_dom_tree);
+    
+    // XML Dom tree - parallel
     let (tx_xml, rx_xml): (Sender<_>, Receiver<UITreeXML>) = channel();
     printfmt!("Spawning separate thread to get ui tree in XML format");
     let start_xml = Instant::now();
     thread::spawn(move || {
-        get_all_elements_xml(tx_xml, None, None);
+        get_all_elements_par_xml(tx_xml, None, None);
     });
     printfmt!("Spawned separate thread to get ui tree in XML format");
     let ui_tree_xml: UITreeXML = rx_xml.recv().unwrap();
@@ -98,20 +114,23 @@ fn main() {
     // printfmt!("XML DOM tree: {}", xml_dom_tree);
     
 
-    // iterative
-    let (tx_iter, rx_iter): (Sender<_>, Receiver<UITreeIter>) = channel();
-    printfmt!("Spawning separate thread to get ui tree iteratively");
-    let start_iter = Instant::now();
-    thread::spawn(move || {
-        get_all_elements_iterative(tx_iter, None);
-    });
-    printfmt!("Spawned separate thread to get ui tree iteratively");
+
+
+
+    // // iterative
+    // let (tx_iter, rx_iter): (Sender<_>, Receiver<UITreeIter>) = channel();
+    // printfmt!("Spawning separate thread to get ui tree iteratively");
+    // let start_iter = Instant::now();
+    // thread::spawn(move || {
+    //     get_all_elements_iterative(tx_iter, None);
+    // });
+    // printfmt!("Spawned separate thread to get ui tree iteratively");
     
-    let ui_tree_iter: UITreeIter = rx_iter.recv().unwrap();
-    let elapsed_iter = start_iter.elapsed();
-    printfmt!("Time taken to get ui tree iteratively: {:#?}", elapsed_iter);
-    // printfmt!("done getting ui tree iteratively");
-    printfmt!("No of elemetns in UI Tree Iter: {:#}", ui_tree_iter.get_elements().len());
+    // let ui_tree_iter: UITreeIter = rx_iter.recv().unwrap();
+    // let elapsed_iter = start_iter.elapsed();
+    // printfmt!("Time taken to get ui tree iteratively: {:#?}", elapsed_iter);
+    // // printfmt!("done getting ui tree iteratively");
+    // printfmt!("No of elemetns in UI Tree Iter: {:#}", ui_tree_iter.get_elements().len());
     
     // ui_tree_iter.for_each(|_index, element| {
     //     // printfmt!("Element: {:#?}", element);

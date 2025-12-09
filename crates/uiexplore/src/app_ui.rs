@@ -236,7 +236,7 @@ impl UIExplorer {
         let app_name = caption.clone();
         let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
         thread::spawn(|| {
-            get_all_elements_xml(tx, None, Some(app_name));
+            get_all_elements_xml(tx, None, None, Some(app_name));
         });
 
         let ui_tree = rx.recv().unwrap();
@@ -1037,7 +1037,7 @@ impl eframe::App for UIExplorer {
                 let app_name = self.app_name.clone();
                 let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
                 thread::spawn(|| {
-                    get_all_elements_xml(tx, None, Some(app_name));
+                    get_all_elements_xml(tx, None, None, Some(app_name));
                 });
                 self.app_mode = AppMode::IsRefreshingTree(rx);
                 state.active_element = None;

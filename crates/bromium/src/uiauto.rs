@@ -6,60 +6,6 @@ use uiautomation::{UIAutomation, UIElement}; // controls::ControlType,
 use log::{debug, error, info, warn}; // trace, 
 
 
-// trait ConvertToControlType {
-//     fn from_str(item: &str) -> ControlType;
-// }
-
-// impl ConvertToControlType for ControlType {
-//     fn from_str(item: &str) -> Self {
-//         match item {
-//             "Button"  => ControlType::Button,
-//             "Calendar"  => ControlType::Calendar,
-//             "CheckBox"  => ControlType::CheckBox,
-//             "ComboBox"  => ControlType::ComboBox,
-//             "Edit"  => ControlType::Edit,
-//             "Hyperlink"  => ControlType::Hyperlink,
-//             "Image"  => ControlType::Image,
-//             "ListItem"  => ControlType::ListItem,
-//             "List"  => ControlType::List,
-//             "Menu"  => ControlType::Menu,
-//             "MenuBar"  => ControlType::MenuBar,
-//             "MenuItem"  => ControlType::MenuItem,
-//             "ProgressBar"  => ControlType::ProgressBar,
-//             "RadioButton"  => ControlType::RadioButton,
-//             "ScrollBar"  => ControlType::ScrollBar,
-//             "Slider"  => ControlType::Slider,
-//             "Spinner"  => ControlType::Spinner,
-//             "StatusBar"  => ControlType::StatusBar,
-//             "Tab"  => ControlType::Tab,
-//             "TabItem"  => ControlType::TabItem,
-//             "Text"  => ControlType::Text,
-//             "ToolBar"  => ControlType::ToolBar,
-//             "ToolTip"  => ControlType::ToolTip,
-//             "Tree"  => ControlType::Tree,
-//             "TreeItem"  => ControlType::TreeItem,
-//             "Custom"  => ControlType::Custom,
-//             "Group"  => ControlType::Group,
-//             "Thumb"  => ControlType::Thumb,
-//             "DataGrid"  => ControlType::DataGrid,
-//             "DataItem"  => ControlType::DataItem,
-//             "Document"  => ControlType::Document,
-//             "SplitButton"  => ControlType::SplitButton,
-//             "Window"  => ControlType::Window,
-//             "Pane"  => ControlType::Pane,
-//             "Header"  => ControlType::Header,
-//             "HeaderItem"  => ControlType::HeaderItem,
-//             "Table"  => ControlType::Table,
-//             "TitleBar"  => ControlType::TitleBar,
-//             "Separator"  => ControlType::Separator,
-//             "SemanticZoom"  => ControlType::SemanticZoom,
-//             "AppBar"  => ControlType::AppBar,
-//             _ => ControlType::Custom, // Default case
-//         }
-//     }
-// }
-
-
 // enum FindResult {
 //     FoundSingle(UIElement),
 //     FoundMultiple(Vec<UIElement>),

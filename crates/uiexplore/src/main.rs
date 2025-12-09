@@ -31,7 +31,7 @@ fn main() -> eframe::Result {
     // get the ui tree in a separate thread
     let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
     thread::spawn(|| {
-        get_all_elements_xml(tx, None, Some(app_name.to_string()));
+        get_all_elements_xml(tx, None, None, Some(app_name.to_string()));
     });
     printfmt!("Spawned separate thread to get ui tree");
 
@@ -46,6 +46,11 @@ fn main() -> eframe::Result {
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).    
 
     let app_size_pos = AppContext::new_from_screen(0.4, 0.8);
+    // let icon = egui::viewport::IconData {
+    //     rgba: include_bytes!("../res/magnifying_computer_256_glowing.png").to_vec(),
+    //     width: 256,
+    //     height: 256,
+    // };
 
     let options = NativeOptions {
         renderer: Renderer::Wgpu, 
@@ -53,6 +58,7 @@ fn main() -> eframe::Result {
                     .with_inner_size([app_size_pos.app_width as f32, app_size_pos.app_height as f32])
                     .with_position(egui::Pos2::new(app_size_pos.app_left as f32, app_size_pos.app_top as f32))
                     .with_resizable(true),
+                    // .with_icon(icon),
         ..Default::default()
     };
 

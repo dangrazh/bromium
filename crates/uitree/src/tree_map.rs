@@ -1,15 +1,28 @@
 //! A generic tree structure with fast key-value lookup (not collision safe!)
 #![allow(dead_code)]
+
 use crate::{UIHashMap, UIHashSet};
 
 // A generic node in a UITreeMap
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct UITreeNode<T> {
     pub name: String,
     pub index: usize,
     pub parent: usize,
     pub children: Vec<usize>,
     pub data: T,
+}
+
+impl<T: Default> UITreeNode<T> {
+    pub fn new(data: T) -> Self {
+        Self {
+            name: String::new(),
+            index: 0,
+            parent: 0,
+            children: Vec::new(),
+            data, 
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +67,23 @@ impl<T> UITreeMap<T> {
         &self.nodes[index]
     }
 
+    pub fn node_mut(&mut self, index: usize) -> &mut UITreeNode<T> {
+        &mut self.nodes[index]
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn has_node(&self, index: usize) -> bool {
+        index < self.nodes.len()
+    }
+
+    pub fn nodes(&self) -> &Vec<UITreeNode<T>> {
+        &self.nodes
+    }
+
+
     pub fn add_child(&mut self, parent: usize, name: &str, rt_id: &str, data: T) -> usize {
         let index = self.nodes.len();
         let node = UITreeNode {
@@ -70,6 +100,61 @@ impl<T> UITreeMap<T> {
         self.nodes.push(node);
         index
     }
+
+    pub fn remove_node(&mut self, index: usize) -> Result<() , String> 
+    where
+        T: Default,
+    {
+        if index == 0 || index >= self.nodes.len() {
+            println!("Error: Attempting to remove index: {} on TreeMap with {} nodes", index, self.nodes.len());
+            return Err("Cannot remove root or invalid index".to_string());
+        }
+
+        // Remove from hash maps
+        let _name_to_index_removal = self.name_to_index.remove_entry(&self.nodes[index].name);
+        let _rtid_to_index_removal = self.rtid_to_index.remove_entry(&self.nodes[index].name);
+
+
+        // Remove from parent's children
+        let parent_index = self.nodes[index].parent;
+        if let Some(pos) = self.nodes[parent_index].children.iter().position(|&x| x == index) {
+            self.nodes[parent_index].children.remove(pos);
+        }
+
+        // recursively remove all children and handle hash maps
+        let children = self.nodes[index].children.clone();
+        for &child_index in &children {
+            let _name_to_index_removal = self.name_to_index.remove_entry(&self.nodes[child_index].name);
+            let _rtid_to_index_removal = self.rtid_to_index.remove_entry(&self.nodes[child_index].name);
+            self.remove_node(child_index)?;
+            
+        }
+        
+        // Remove all children references
+        self.nodes[index].children.clear(); 
+        
+
+        // We leave the node in the vector to keep indices stable
+        // but we replace it with an emptpy placeholder
+        self.nodes[index] = UITreeNode::new(T::default());
+        
+        Ok(())
+        
+    }
+
+    // pub fn append_subtree(&mut self, parent: usize, subtree: &UITreeMap<T>) -> usize 
+    // where
+    //     T: Clone,
+    // {
+    //     todo!("Implement subtree appending");
+    //     // Steps to implement:
+    //     // 1. Clone the root of the subtree and add it as a child of the parent
+    //     // 2. Recursively add all children, updating their parent references
+    //     // 3. Update the name_to_index and rtid_to_index maps accordingly
+    //     // 4. Return the index of the new subtree root in the current tree
+    // }
+
+
 
     pub fn get_path_to_element(&self, index: usize) -> Vec<usize> {
         let mut path = Vec::new();

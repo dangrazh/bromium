@@ -11,14 +11,14 @@ mod uiexplore;
 pub use uiexplore::{SaveUIElement, UITree, UIElementInTree, get_all_elements};
 
 mod uiexplore_xml;
-pub use uiexplore_xml::{UITree as UITreeXML, UIElementInTree as UIElementInTreeXML, get_all_elements_xml}; // SaveUIElement as SaveUIElementXML, 
+pub use uiexplore_xml::{UITree as UITreeXML, UIElementInTree as UIElementInTreeXML, get_all_elements_xml, get_all_elements_par_xml}; // SaveUIElement as SaveUIElementXML, 
 
 
 mod uiexplore_iter;
 pub use uiexplore_iter::{SaveUIElement as SaveUIElementIter, UITree as UITreeIter, UIElementInTree as UIElementInTreeIter, get_all_elements_iterative};
 
 mod conversion;
-pub use conversion::ConvertFromControlType;
+pub use conversion::{ConvertFromControlType, ConvertToControlType};
 
 mod commons;
 
