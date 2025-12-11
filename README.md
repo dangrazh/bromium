@@ -7,7 +7,7 @@ Bromium is a Python library that provides bindings to interact with the Windows 
 - Get cursor position coordinates
 - Retrieve UI element information at specific coordinates
 - Get screen context information (size and scaling)
-- Cross-platform development using Rust with Python bindings
+
 
 <!-- ## Installation
 
@@ -55,11 +55,12 @@ The main class for interacting with Windows UI elements.
 
 #### Methods
 
+- `launch_or_activate_app() -> bool`: Launches a new application or activates an existing window
+- `get_ui_element_by_xpath(xpath: str) -> Element`: Get UI element from an xpath
 - `get_curser_pos() -> tuple[int, int]`: Get current cursor coordinates
 - `get_ui_element(x: int, y: int) -> Element`: Get UI element at specified coordinates
-- `get_ui_element_by_xpath(xpath: str) -> Element`: Get UI element from an xpath
 - `get_screen_context() -> ScreenContext`: Get screen size and scaling information
-- `launch_or_activate_app() -> bool`: Launches a new application or activates an existing window
+
 
 ### Element
 
