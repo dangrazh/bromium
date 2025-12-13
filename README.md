@@ -1,8 +1,10 @@
 # Bromium
 
-Bromium is a Python library that provides bindings to interact with the Windows UI Automation API through Rust. It enables users to automate tasks and interact with Windows UI elements programmatically.
+Bromium as a project aims to provide the required infrastructure to automate tasks in Microsoft Windows Desktop Applications. It is devided in two main components:
+- the bromium Python library that provides bindings to interact with the Windows UI Automation API through Rust. It enables users to automate tasks and interact with Windows UI elements programmatically.
+- the UI Expore Desktop application (inspired by inspect.exe) which allows users to inspect the current Windows Desktop, get xpath locators to any ui element on the desktop and test custom xpah locators. It can be run without a need to install the application and without admin rights. 
 
-## Features
+## Library Features
 
 - Get cursor position coordinates
 - Retrieve UI element information at specific coordinates
