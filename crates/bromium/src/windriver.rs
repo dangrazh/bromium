@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use pyo3::prelude::*;
+// use windows::UI;
 // use uiautomation::types::Handle;
 
 use crate::sreen_context::ScreenContext;
@@ -25,7 +26,7 @@ use uiautomation::{UIElement}; //UIAutomation,
 
 use log::{debug, error, info, trace, warn};
 
-static WINDRIVER: Mutex<Option<WinDriver>> = Mutex::new(None);
+pub static WINDRIVER: Mutex<Option<WinDriver>> = Mutex::new(None);
 
 
 #[pyclass]
@@ -271,6 +272,12 @@ pub struct WinDriver {
     // TODO: Add screen context to get scaling factor later on
 }
 
+impl WinDriver {
+    pub fn get_ui_tree(&self) -> &UITreeXML {
+        &self.ui_tree
+    }
+}
+
 #[pymethods]
 impl WinDriver {
     #[new]
@@ -441,7 +448,16 @@ impl WinDriver {
         debug!("WinDriver::launch_or_activate_app called with {} as app path and {} as xpath element.", app_path, xpath);
 
         let result = launch_or_activate_application(&app_path, &xpath);
-        PyResult::Ok(result)
+        match result {
+            Ok(_) => {
+                info!("Application launched or activated successfully.");
+                PyResult::Ok(true)
+            }
+            Err(e) => {
+                error!("Error launching or activating application: {}", e);
+                PyResult::Err(pyo3::exceptions::PyValueError::new_err(format!("Failed to launch or activate application: {}", e)))
+            }
+        }
     }
 
     fn refresh(&mut self) -> PyResult<()> {

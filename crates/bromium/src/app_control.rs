@@ -1,22 +1,36 @@
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
-use std::time::Duration;
-use std::thread;
+// use std::ffi::OsStr;
+// use std::os::windows::ffi::OsStrExt;
+// use std::time::Duration;
+// use std::thread;
+
+use crate::windriver::WINDRIVER;
+
+#[allow(unused_imports)]
 use std::process::Command;
-use regex::Regex;
+// use regex::Regex;
 
-use winapi::um::winuser::{
-    FindWindowW, SetForegroundWindow, GetForegroundWindow, ShowWindow, BringWindowToTop,
-    SW_RESTORE, SW_SHOW, GetWindowThreadProcessId, AttachThreadInput,
-    WM_SYSCOMMAND, SC_RESTORE, SendMessageW, EnumWindows, GetWindowTextW, 
-    GetWindowTextLengthW, IsWindowVisible, GetWindowPlacement, 
-    WINDOWPLACEMENT, SW_SHOWMINIMIZED, keybd_event, VK_MENU, KEYEVENTF_KEYUP
-};
-use winapi::shared::windef::HWND;
-use winapi::shared::minwindef::{BOOL, LPARAM};
-use log::{debug, error, info, trace, warn};
+// use winapi::um::winuser::{
+//     FindWindowW, SetForegroundWindow, GetForegroundWindow, ShowWindow, BringWindowToTop,
+//     SW_RESTORE, SW_SHOW, GetWindowThreadProcessId, AttachThreadInput,
+//     WM_SYSCOMMAND, SC_RESTORE, SendMessageW, EnumWindows, GetWindowTextW, 
+//     GetWindowTextLengthW, IsWindowVisible, GetWindowPlacement, 
+//     WINDOWPLACEMENT, SW_SHOWMINIMIZED, keybd_event, VK_MENU, KEYEVENTF_KEYUP
+// };
+// use winapi::shared::windef::HWND;
+// use winapi::shared::minwindef::{BOOL, LPARAM};
+ #[allow(unused_imports)]
+ use log::{debug, error, info, trace, warn};
 
-// Extract window names from XPath
+
+/* **********************************
+ *
+ * 
+ * replacing with ui tree based logic
+ * 
+ * 
+ * **********************************
+
+ // Extract window names from XPath
 fn extract_window_names_from_xpath(xpath: &str) -> Vec<String> {
     debug!("Extract window names from XPath: {}", xpath);
 
@@ -41,6 +55,7 @@ fn extract_window_names_from_xpath(xpath: &str) -> Vec<String> {
     
     window_names
 }
+
 
 // Scan for all windows on the system
 fn scan_for_all_windows() -> Vec<(String, HWND)> {
@@ -432,4 +447,28 @@ pub fn launch_or_activate_application(app_path: &str, xpath: &str) -> bool {
             false
         }
     }
+}*/
+
+pub fn launch_or_activate_application(_app_path: &str, _xpath: &str) -> Result<bool, String> {
+    // Placeholder implementation
+    
+
+    let win_driver_opt = WINDRIVER.lock().unwrap().clone();
+    match win_driver_opt {
+        None => {
+            error!("WinDriver instance is not initialized");
+            return Err("WinDriver instance is not initialized".to_string());
+        },
+        Some(win_driver) => {
+            debug!("WinDriver instance is available");
+            let ui_tree = win_driver.get_ui_tree();
+            debug!("UI Tree is available with {} elements", ui_tree.get_elements().len());
+            // TODO: Further logic to utilize the UI tree for application activation would go here
+            // todo!("Implementation of  application launch or activation logic currently missing");
+        }
+    }
+    
+    Ok(true)
+
+    
 }
