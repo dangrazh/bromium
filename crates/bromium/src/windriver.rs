@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 
 use crate::sreen_context::ScreenContext;
 use crate::uiauto::{get_ui_element_by_runtimeid}; // get_ui_element_by_xpath, get_element_by_xpath
-use uitree::{UITreeXML, get_all_elements_xml};
+use uitree::{SaveUIElementXML, UITreeXML, get_all_elements_xml};
 // use crate::uiexplore::UITree;
 use crate::app_control::launch_or_activate_application;
 
@@ -230,6 +230,46 @@ impl Element {
 
 }
 
+impl From<&UIElement> for Element {
+    fn from(ui_element: &UIElement) -> Self {
+        debug!("Element::from called.");
+        let bound_rect_res = ui_element.get_bounding_rectangle();
+        let bounding_rect: RECT;
+        match bound_rect_res {
+            Ok(bounding_rect_inner) => {bounding_rect = bounding_rect_inner.into();},
+            Err(e) => {
+                error!("Error getting bounding rectangle: {:?}", e);
+                bounding_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 }
+            }
+        }
+
+        let native_handle: isize = ui_element.get_native_window_handle().unwrap_or_default().into();
+        Element {
+            name: ui_element.get_name().unwrap_or("".to_string()),
+            xpath: String::new(), // XPath is not available here
+            handle: native_handle,
+            runtime_id: ui_element.get_runtime_id().unwrap_or(vec![0,0,0,0]),
+            bounding_rectangle: RECT {
+                left: bounding_rect.left,            
+                top: bounding_rect.top,
+                right: bounding_rect.right,
+                bottom: bounding_rect.bottom,
+            },
+        }
+    }
+
+
+}
+
+#[allow(unconditional_recursion)]
+impl From<&SaveUIElementXML> for Element {
+    fn from (ui_element: &SaveUIElementXML) -> Self {
+    debug!("Element::from called.");
+    let props = ui_element.get_element();
+    Element::from(props)
+}
+}
+
 impl Default for Element {
     fn default() -> Self {
         Element {
@@ -444,14 +484,15 @@ impl WinDriver {
     /// 
     /// Returns:
     ///     bool: True if the application was successfully launched or activated
-    pub fn launch_or_activate_app(&self, app_path: String, xpath: String) -> PyResult<bool> {
+    pub fn launch_or_activate_app(&self, app_path: String, xpath: String) -> PyResult<Element> {
         debug!("WinDriver::launch_or_activate_app called with {} as app path and {} as xpath element.", app_path, xpath);
 
         let result = launch_or_activate_application(&app_path, &xpath);
         match result {
-            Ok(_) => {
+            Ok(save_ui_elem) => {
                 info!("Application launched or activated successfully.");
-                PyResult::Ok(true)
+                let ui_elem = Element::from(&save_ui_elem);
+                PyResult::Ok(ui_elem)
             }
             Err(e) => {
                 error!("Error launching or activating application: {}", e);

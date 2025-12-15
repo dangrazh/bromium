@@ -76,6 +76,15 @@ impl SaveUIElement {
         self
     }
 
+    pub fn set_focus(&self) -> uiautomation::Result<()> {
+        debug!("Setting focus to element with runtime id: {:?}", self.runtime_id);
+        if let Some(elem) = self.get_ui_automation_ui_element() {
+            elem.set_focus()
+        } else {
+            Err(uiautomation::Error::new(1, "Element not found for setting focus"))
+        }
+    }
+
     pub fn set_xpath(&mut self, xpath: String) {
         self.xpath = Some(xpath)
     }

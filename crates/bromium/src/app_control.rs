@@ -3,10 +3,6 @@
 // use std::time::Duration;
 // use std::thread;
 
-use crate::windriver::WINDRIVER;
-
-#[allow(unused_imports)]
-use std::process::Command;
 // use regex::Regex;
 
 // use winapi::um::winuser::{
@@ -18,8 +14,6 @@ use std::process::Command;
 // };
 // use winapi::shared::windef::HWND;
 // use winapi::shared::minwindef::{BOOL, LPARAM};
- #[allow(unused_imports)]
- use log::{debug, error, info, trace, warn};
 
 
 /* **********************************
@@ -449,8 +443,19 @@ pub fn launch_or_activate_application(app_path: &str, xpath: &str) -> bool {
     }
 }*/
 
-pub fn launch_or_activate_application(_app_path: &str, _xpath: &str) -> Result<bool, String> {
-    // Placeholder implementation
+use crate::windriver::WINDRIVER;
+
+#[allow(unused_imports)]
+use std::process::Command;
+
+#[allow(unused_imports)]
+ use log::{debug, error, info, trace, warn};
+use uitree::SaveUIElementXML;
+
+
+
+pub fn launch_or_activate_application<>(_app_path: &str, xpath: &str) -> Result<SaveUIElementXML, String> {
+    
     
 
     let win_driver_opt = WINDRIVER.lock().unwrap().clone();
@@ -463,12 +468,33 @@ pub fn launch_or_activate_application(_app_path: &str, _xpath: &str) -> Result<b
             debug!("WinDriver instance is available");
             let ui_tree = win_driver.get_ui_tree();
             debug!("UI Tree is available with {} elements", ui_tree.get_elements().len());
-            // TODO: Further logic to utilize the UI tree for application activation would go here
-            // todo!("Implementation of  application launch or activation logic currently missing");
+            
+            // try to find the application window using the UI tree and xpath
+            let element_opt = ui_tree.get_element_by_xpath(xpath);
+            match element_opt {
+                Some(element) => {
+                    info!("Found UI element for xpath: {}", xpath);
+                    // set the focus to the application window (the ui element) and return 
+                    // a reference the obtained SaveUIElement
+                    // For now, we just log and return true
+                    info!("Activating application window for element: {:?}", element);
+                    element.set_focus().map_err(|e| format!("Failed to set focus: {:?}", e))?;
+                    return Ok(element.clone());
+                },
+                None => {
+                    warn!("No UI element found for xpath: {}", xpath);
+                    // TODO: Here we need to implement the logic to launch the application
+                    // For now, we just log and return an error
+                    info!("Launching application at path: {}", _app_path);
+                    return Err("Application not open, Launch logic not yet implemented".to_string());
+                }
+                
+            }
+            
         }
     }
     
-    Ok(true)
+    
 
     
 }
