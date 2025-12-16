@@ -501,13 +501,36 @@ impl WinDriver {
         }
     }
 
-    fn refresh(&mut self) -> PyResult<()> {
+    pub fn refresh_ui_tree(&mut self) -> PyResult<()> {
         debug!("WinDriver::refresh called.");
         // get the ui tree in a separate thread
         let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
         thread::spawn(|| {
             debug!("Spawning thread to get UI tree");
             get_all_elements_xml(tx, None, None, None);
+        });
+        info!("Spawned separate thread to refresh ui tree");
+        
+        let ui_tree: UITreeXML = rx.recv().unwrap();
+        
+        self.ui_tree = ui_tree;
+        self.tree_needs_update = false;
+        
+        {
+            *WINDRIVER.lock().unwrap() = Some(self.clone());
+        }
+
+        info!("UITree successfully refreshed");
+        PyResult::Ok(())
+    }
+
+    pub fn refresh_ui_tree_top_2(&mut self) -> PyResult<()> {
+        debug!("WinDriver::refresh called.");
+        // get the ui tree in a separate thread
+        let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
+        thread::spawn(|| {
+            debug!("Spawning thread to get UI tree");
+            get_all_elements_xml(tx, None, Some(2 as usize), None);
         });
         info!("Spawned separate thread to refresh ui tree");
         
