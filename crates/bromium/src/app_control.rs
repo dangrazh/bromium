@@ -17,6 +17,7 @@ pub fn launch_or_activate_application<>(app_path: &str, xpath: &str) -> Result<S
     
     let win_driver_opt: Option<WinDriver>;
     {
+        // This is in a dedicated scope to limit the lock duration
         win_driver_opt = WINDRIVER.lock().unwrap().clone();
     }
     

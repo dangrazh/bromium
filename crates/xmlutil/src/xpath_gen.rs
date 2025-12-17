@@ -8,8 +8,35 @@ fn is_attribute_unique(doc: &Document, node: Node, attr_name: &str) -> bool {
             .descendants()
             .filter(|n| n.attribute(attr_name) == Some(attr_value))
             .count();
-        return count == 1;
+        eprintln!("Attribute '{}' with value '{}' found {} times", attr_name, attr_value, count);
+        if count == 1 {
+            return true;
+        } else {
+            return false;
+        }
+
     }
+    // Attribute not present - return false
+    false
+}
+
+fn is_attribute_with_ct_unique(doc: &Document, node: Node, attr_name: &str) -> bool {
+    if let Some(attr_value) = node.attribute(attr_name) {
+        if let Some(ct_value) = node.attribute("ControlType") {
+            let count = doc
+                .descendants()
+                .filter(|n| n.attribute(attr_name) == Some(attr_value) && n.attribute("ControlType") == Some(ct_value))
+                .count();
+            eprintln!("Attribute '{}' with value '{}' found {} times", attr_name, attr_value, count);
+        
+            if count == 1 {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    }
+    // Attribute not present - return false
     false
 }
 
@@ -31,10 +58,12 @@ fn get_xpath_robula(doc: &Document, node: Node, simple_xpath: bool) -> String {
             let tag = n.tag_name().name();
 
             // Try using unique attribute in parent scope
-            if !simple_xpath && is_attribute_unique(doc, n, "Name") {
+            eprintln!("Checking Name attribute for node: {}", tag);
+            if !simple_xpath && is_attribute_with_ct_unique(doc, n, "Name") {
+                eprintln!("Using Name attribute for node: {}", tag.to_string());
                 path_parts.push(format!("{}[@Name='{}']", tag, n.attribute("Name").unwrap()));
             } else {
-
+                eprintln!("Cannot use Name attribute for node: {}", tag);
                 // Determine if this node needs an index
                 let parent = n.parent();
                 let same_tag_count = parent.map_or(1, |p| {

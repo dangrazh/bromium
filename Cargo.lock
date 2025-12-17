@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "bromium"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "display-info",
@@ -5142,7 +5142,7 @@ dependencies = [
 
 [[package]]
 name = "uiexplore"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "eframe",

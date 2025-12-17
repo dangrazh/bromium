@@ -258,6 +258,15 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
     xml_root.set_attribute("RtID", runtime_id.as_str());
     xml_root.set_attribute("z-order", 999.to_string().as_str());
     xml_root.set_attribute("Name", root.get_name().unwrap_or("No name defined".to_string()).as_str());
+    let control_type = root.get_control_type();
+    match control_type {
+        Ok(ct) => {
+            xml_root.set_attribute("ControlType", ct.as_str());
+        },
+        Err(_) => {
+            xml_root.set_attribute("ControlType", "No control type defined");
+        }
+    }
 
     if let Ok(_first_child) = walker.get_first_child(&root) {     
         // itarate over all child ui elements
@@ -314,6 +323,15 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
     let xml_root = xml_writer.get_root_mut().unwrap();
     xml_root.set_attribute("RtID", runtime_id.as_str());
     xml_root.set_attribute("Name", root.get_name().unwrap_or("No name defined".to_string()).as_str());
+    let control_type = root.get_control_type();
+    match control_type {
+        Ok(ct) => {
+            xml_root.set_attribute("ControlType", ct.as_str());
+        },
+        Err(_) => {
+            xml_root.set_attribute("ControlType", "No control type defined");
+        }
+    }   
 
     if let Ok(_first_child) = walker.get_first_child(&root) {     
         // itarate over all child ui elements
@@ -460,6 +478,15 @@ fn get_element(mut tree: &mut UITreeMap<SaveUIElement>, mut ui_elements: &mut Ve
             curr_xml_dom_node.set_attribute("z-order", z_order.to_string().as_str());
     }
     curr_xml_dom_node.set_attribute("Name", element.get_name().unwrap_or("No name defined".to_string()).as_str());
+    let control_type = element.get_control_type();
+    match control_type {
+        Ok(ct) => {
+            curr_xml_dom_node.set_attribute("ControlType", ct.as_str());
+        },
+        Err(_) => {
+            curr_xml_dom_node.set_attribute("ControlType", "No control type defined");
+        }
+    }
     
 
     // Walking the children of the current element
