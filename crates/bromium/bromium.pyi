@@ -237,12 +237,30 @@ class WinDriver:
         """
         pass
 
+    def reload() -> WinDriver:
+        """
+        Reloads the WinDriver instance to refresh its internal state.
+        
+        Returns:
+        - WinDriver: A new instance of WinDriver with refreshed state.
+        """
+        pass
+    
     def get_timeout(self) -> int:
         """
         Returns the current timeout value in milliseconds.
         
         Returns:
         - int: The current timeout value in milliseconds.
+        """
+        pass
+
+    def get_no_of_ui_elements(self) -> int:
+        """
+        Returns the number of UI elements in the current UI tree.
+        
+        Returns:
+        - int: The number of UI elements.
         """
         pass
 
@@ -264,7 +282,7 @@ class WinDriver:
         """
         pass
 
-    def get_ui_element(self, x: int, y: int) -> 'Element':
+    def get_ui_element_by_coordinates(self, x: int, y: int) -> 'Element':
         """
         Returns the Windows UI Automation API UI element of the window at the given coordinates.
         
@@ -321,7 +339,7 @@ class WinDriver:
         """
         pass
 
-    def launch_or_activate_app(self, app_path: str, xpath: str) -> bool:
+    def launch_or_activate_app(self, app_path: str, xpath: str) -> Element:
         """
         Launch or activate an application using its path and an XPath.
         

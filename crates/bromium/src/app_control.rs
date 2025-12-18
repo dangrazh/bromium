@@ -50,7 +50,6 @@ pub fn launch_or_activate_application<>(app_path: &str, xpath: &str) -> Result<S
                     match Command::new(app_path).spawn() {
                         Ok(child) => {
                             info!("Successfully spawned process with PID: {:?}", child.id());
-                            
                             // Wait for ANY window to appear
                             let max_attempts = 20;
                             let mut attempt = 1;
@@ -85,10 +84,13 @@ pub fn launch_or_activate_application<>(app_path: &str, xpath: &str) -> Result<S
                                         // set the focus to the application window (the ui element) and return 
                                         // a reference the obtained SaveUIElement
                                         // For now, we just log and return true
-                                        info!("Activating application window for element: {:?}", element);
+                                        info!("Activating (set focus) application window for element: {:?}", element);
                                         element.set_focus().map_err(|e| format!("Failed to set focus: {:?}", e))?;
                                         success = true;
-                                        result = Ok(element.clone());
+                                        let element_out = element.clone();
+                                        info!("Running a full refresh o f the UI tree after activation");
+                                        win_driver.refresh_ui_tree().map_err(|e| format!("Failed to refresh UI tree: {:?}", e))?;
+                                        result = Ok(element_out);
                                     },
                                     None => {
                                         trace!("No UI element found for xpath: {} on attempt {}", xpath, attempt);

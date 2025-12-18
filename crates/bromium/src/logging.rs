@@ -31,14 +31,14 @@ fn get_default_log_path() -> PathBuf {
             if let Ok(temp_dir) = std::env::var("TEMP").or_else(|_| std::env::var("TMP")) {
                 let fallback = PathBuf::from(temp_dir).join("bromium_logs");
                 let _ = std::fs::create_dir_all(&fallback);
-                let timestamp = chrono::Local::now().format("%Y%m%d").to_string();
+                let timestamp = chrono::Local::now().format("%Y%m%d%H%S").to_string();
                 return fallback.join(format!("bromium_{}.log", timestamp));
             }
         }
     }
     
     // Generate filename with timestamp
-    let timestamp = chrono::Local::now().format("%Y%m%d").to_string();
+    let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
     log_dir.join(format!("bromium_{}.log", timestamp))
 }
 

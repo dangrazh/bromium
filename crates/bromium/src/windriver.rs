@@ -261,12 +261,40 @@ impl From<&UIElement> for Element {
 
 }
 
-#[allow(unconditional_recursion)]
+
 impl From<&SaveUIElementXML> for Element {
     fn from (ui_element: &SaveUIElementXML) -> Self {
     debug!("Element::from called.");
-    let props = ui_element.get_element();
-    Element::from(props)
+    if let Some(props) = ui_element.get_ui_automation_ui_element() {
+    
+        let bound_rect_res = props.get_bounding_rectangle();
+        let bounding_rect: RECT;
+        match bound_rect_res {
+            Ok(bounding_rect_inner) => {bounding_rect = bounding_rect_inner.into();},
+            Err(e) => {
+                error!("Error getting bounding rectangle: {:?}", e);
+                bounding_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 }
+            }
+        }
+
+        let native_handle: isize = props.get_native_window_handle().unwrap_or_default().into();
+        Element {
+            name: props.get_name().unwrap_or("".to_string()),
+            xpath: String::new(), // XPath is not available here
+            handle: native_handle,
+            runtime_id: props.get_runtime_id().unwrap_or(vec![0,0,0,0]),
+            bounding_rectangle: RECT {
+                left: bounding_rect.left,            
+                top: bounding_rect.top,
+                right: bounding_rect.right,
+                bottom: bounding_rect.bottom,
+            },
+        }
+    } else {
+        error!("UIAutomation element properties not found in SaveUIElementXML");
+        Element::default()
+    }
+
 }
 }
 
@@ -308,6 +336,7 @@ fn convert_to_ui_element(element: &Element) -> Result<UIElement, uiautomation::E
 pub struct WinDriver {
     timeout_ms: u64,
     ui_tree: UITreeXML,
+    items_in_ui_tree: usize,
     tree_needs_update: bool,
     // TODO: Add screen context to get scaling factor later on
 }
@@ -333,9 +362,10 @@ impl WinDriver {
         info!("Spawned separate thread to get ui tree");
         
         let ui_tree: UITreeXML = rx.recv().unwrap();
-        debug!("UI tree received with {} elements", ui_tree.get_elements().len());
+        let items_in_ui_tree = ui_tree.get_elements().len();
+        debug!("UI tree received with {} elements", items_in_ui_tree);
         
-        let driver = WinDriver { timeout_ms, ui_tree, tree_needs_update: false };
+        let driver = WinDriver { timeout_ms, ui_tree, items_in_ui_tree, tree_needs_update: false };
 
         *WINDRIVER.lock().unwrap() = Some(driver.clone());
 
@@ -344,7 +374,7 @@ impl WinDriver {
     }
 
     pub fn __repr__(&self) -> PyResult<String> {
-        PyResult::Ok(format!("<WinDriver timeout={}>, ui_tree={{object}}, needs_update={}", self.timeout_ms, self.tree_needs_update))
+        PyResult::Ok(format!("<WinDriver timeout={}>, ui_tree={{object}}, items_in_ui_tree={}, tree_needs_update={}", self.timeout_ms, self.items_in_ui_tree, self.tree_needs_update))
     }
 
     pub fn __str__(&self) -> PyResult<String> {
@@ -353,6 +383,10 @@ impl WinDriver {
 
     pub fn get_timeout(&self) -> u64 {
         self.timeout_ms
+    }
+
+    pub fn get_no_of_ui_elements(&self) -> usize {
+        self.ui_tree.get_elements().len()
     }
 
     pub fn set_timeout(&mut self, timeout_ms: u64) {
@@ -368,9 +402,19 @@ impl WinDriver {
         }
     }
 
-    pub fn get_ui_element(&self, x: i32, y: i32) -> PyResult<Element> {
-        debug!("WinDriver::get_ui_element called for coordinates: ({}, {})", x, y);
-    
+    pub fn reload(&self) -> PyResult<Self> {
+        debug!("WinDriver::reload called.");
+        let driver: Self;
+        {
+            driver = WINDRIVER.lock().unwrap().clone().unwrap();
+        }
+        
+        Ok(driver)
+    }
+
+    pub fn get_ui_element_by_coordinates(&self, x: i32, y: i32) -> PyResult<Element> {
+        debug!("WinDriver::get_ui_element_by_coordinates called for coordinates: ({}, {})", x, y);
+
         let cursor_position = POINT { x, y };
 
         if let Some(ui_element_in_tree) = crate::rectangle::get_point_bounding_rect(&cursor_position, self.ui_tree.get_elements()) {
@@ -400,8 +444,11 @@ impl WinDriver {
         debug!("WinDriver::get_ui_element_by_xpath called.");
         
         // let ui_elem = get_element_by_xpath(xpath.clone(), &self.ui_tree);
+        debug!("Searching for element with xpath: {}", xpath);
+        debug!("UI Tree has {} elements", self.ui_tree.get_elements().len());
         let ui_elem = self.ui_tree.get_element_by_xpath(xpath.as_str());
         if ui_elem.is_none() {
+            debug!("Element not found for xpath: {}", xpath);
             return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Element not found"));
         }
         
@@ -521,6 +568,7 @@ impl WinDriver {
         }
 
         info!("UITree successfully refreshed");
+        debug!("UI Tree has now {} elements", self.ui_tree.get_elements().len());
         PyResult::Ok(())
     }
 
