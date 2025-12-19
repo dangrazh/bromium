@@ -402,6 +402,11 @@ impl WinDriver {
         }
     }
 
+    pub fn refresh(&mut self) -> PyResult<()> {
+        debug!("WinDriver::refresh called.");
+        self.refresh_ui_tree()
+    }
+
     pub fn reload(&self) -> PyResult<Self> {
         debug!("WinDriver::reload called.");
         let driver: Self;

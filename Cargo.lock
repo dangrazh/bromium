@@ -5166,6 +5166,7 @@ dependencies = [
  "log",
  "uiautomation",
  "xmlutil",
+ "xot 0.31.2",
 ]
 
 [[package]]

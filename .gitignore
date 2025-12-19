@@ -6,6 +6,7 @@ test_bromium.py
 
 # Admin files
 *.xls*
+*.od*
 *.txt
 *.ppt*
 *.png
