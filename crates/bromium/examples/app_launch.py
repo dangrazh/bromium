@@ -54,7 +54,7 @@ def demo_app_launch():
             xpath_username = r"//Edit[@Name='E-Mail-Adresse, Telefonnummer oder Skype-Name']"
             try:
                 username_field = driver.get_ui_element_by_xpath(xpath_username)
-                username_field.send_keys("dani.grass@bluewin.ch")
+                username_field.send_keys("john.doe@gmail.com")
             except Exception as e:
                 print("Username field not found, aborting login.")
 
@@ -65,15 +65,6 @@ def demo_app_launch():
         print(f"Error during launch/activation of {file_name}: {e}")        
     
     print("Test completed!")
-    # # Test again to demonstrate activation of already running app
-    # print("\nTesting activation of already running app...")
-    # success2 = driver.launch_or_activate_app(app_path, xpath)
-    # print(f"Second attempt result: {'Success' if success2 else 'Failed'}")
-    
-    # # Wait to observe
-    # time.sleep(2)
-    
-    # print("Test completed!")
 
 if __name__ == "__main__":
     demo_app_launch()

@@ -31,6 +31,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 .venv/
+pyo3venv/
 .pyo3venv/
 env/
 # bin/
