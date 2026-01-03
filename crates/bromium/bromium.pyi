@@ -202,7 +202,7 @@ class WinDriver:
     - __str__(self) -> str: Returns a string representation of the Windriver instance.
     - get_timeout(self) -> int: Returns the current timeout value in milliseconds.
     - set_timeout(self, timeout_ms: int) -> None: Sets a new timeout value in milliseconds.
-    - get_curser_pos(self) -> tuple[int, int]: Returns the current cursor position.
+    - get_cursor_pos(self) -> tuple[int, int]: Returns the current cursor position.
     - get_ui_element(self, x: int, y: int) -> Element: Returns the UI Element at the given coordinates.
     - get_screen_context(self) -> ScreenContext: Returns the screen context information.
     - take_screenshot(self) -> str: Takes a screenshot of the current screen, saves it and returns the path to the file created.
@@ -273,7 +273,7 @@ class WinDriver:
         """
         pass
 
-    def get_curser_pos(self) -> tuple[int, int]:
+    def get_cursor_pos(self) -> tuple[int, int]:
         """
         Returns the current cursor position as a tuple of (x, y) coordinates.
         
@@ -282,7 +282,7 @@ class WinDriver:
         """
         pass
 
-    def get_ui_element_by_coordinates(self, x: int, y: int) -> 'Element':
+    def get_element_by_coordinates(self, x: int, y: int) -> 'Element':
         """
         Returns the Windows UI Automation API UI element of the window at the given coordinates.
         
@@ -295,7 +295,7 @@ class WinDriver:
         """
         pass
 
-    def get_ui_element_by_xpath(self, xpath: str) -> 'Element':
+    def get_element_by_xpath(self, xpath: str) -> 'Element':
         """
         Returns the Windows UI Automation API UI element of the window at the given xpath. As an xpath
         is a string representation of the UI element, it is not a valid xpath in the XML sense.

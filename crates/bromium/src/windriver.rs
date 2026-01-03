@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 // use uiautomation::types::Handle;
 
 use crate::sreen_context::ScreenContext;
-use crate::uiauto::{get_ui_element_by_runtimeid}; // get_ui_element_by_xpath, get_element_by_xpath
+use crate::uiauto::{get_ui_element_by_runtimeid, supports_invoke, supports_select, invoke_click, select_item}; // get_ui_element_by_xpath, get_element_by_xpath
 use uitree::{SaveUIElementXML, UITreeXML, get_all_elements_xml};
 // use crate::uiexplore::UITree;
 use crate::app_control::launch_or_activate_application;
@@ -46,6 +46,7 @@ impl Element {
 
     #[new]
     pub fn new(name: String, xpath: String, handle: isize, runtime_id: Vec<i32>, bounding_rectangle: (i32, i32, i32, i32)) -> Self {
+        
         debug!("Creating new Element: name='{}', xpath='{}', handle={}", name, xpath, handle);
         let bounding_rectangle  = RECT {
             left: bounding_rectangle.0,
@@ -84,16 +85,54 @@ impl Element {
     pub fn send_click(&self) -> PyResult<()> {
         debug!("Element::send_click called for element: {}", self.name);
         if let Ok(e) = convert_to_ui_element(self) {
-            match e.click() {
-                Ok(_) => {
-                    info!("Successfully clicked on element: {:#?}", e);
+            let raw_element = e.as_ref();
+            if supports_invoke(raw_element) {
+                debug!("Element supports Invoke pattern, using invoke_click.");
+                match invoke_click(raw_element) {
+                    Ok(_) => {
+                        info!("Successfully invoked click on element: {:#?}", e);
+                    }
+                    Err(e) => {
+                        error!("Error invoking click on element: {:?}", e);
+                        return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Invoke click failed"));
+                    }
                 }
-                Err(e) => {
-                    error!("Error clicking on element: {:?}", e);
-                    return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Click failed"));
+            } else if supports_select(raw_element) {
+                debug!("Element supports Select pattern, using select_item.");
+                match select_item(raw_element) {
+                    Ok(_) => {
+                        info!("Successfully selected item on element: {:#?}", e);
+                    }
+                    Err(e) => {
+                        error!("Error selecting item on element: {:?}", e);
+                        return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Select item failed"));
+                    }
                 }
-                
             }
+            else {
+                debug!("Element does not support Invoke or Select pattern, using standard click as fallback.");
+                 match e.click() {
+                    Ok(_) => {
+                        info!("Successfully clicked on element: {:#?}", e);
+                    }
+                    Err(e) => {
+                        error!("Error clicking on element: {:?}", e);
+                        return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Click failed"));
+                    }
+                }
+            }   
+
+
+            // match e.click() {
+            //     Ok(_) => {
+            //         info!("Successfully clicked on element: {:#?}", e);
+            //     }
+            //     Err(e) => {
+            //         error!("Error clicking on element: {:?}", e);
+            //         return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Click failed"));
+            //     }
+                
+            // }
         } else {
             return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Element not found"));
         }
@@ -393,8 +432,8 @@ impl WinDriver {
         self.timeout_ms = timeout_ms;
     }
 
-    pub fn get_curser_pos(&self) -> PyResult<(i32, i32)> {
-        debug!("WinDriver::get_curser_pos called.");
+    pub fn get_cursor_pos(&self) -> PyResult<(i32, i32)> {
+        debug!("WinDriver::get_cursor_pos called.");
         let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
         unsafe {
             let _res= GetCursorPos(&mut point);
@@ -417,7 +456,7 @@ impl WinDriver {
         Ok(driver)
     }
 
-    pub fn get_ui_element_by_coordinates(&self, x: i32, y: i32) -> PyResult<Element> {
+    pub fn get_element_by_coordinates(&self, x: i32, y: i32) -> PyResult<Element> {
         debug!("WinDriver::get_ui_element_by_coordinates called for coordinates: ({}, {})", x, y);
 
         let cursor_position = POINT { x, y };
@@ -445,7 +484,7 @@ impl WinDriver {
 
     }
 
-    fn get_ui_element_by_xpath(&self, xpath: String) -> PyResult<Element> {
+    fn get_element_by_xpath(&self, xpath: String) -> PyResult<Element> {
         debug!("WinDriver::get_ui_element_by_xpath called.");
         
         // let ui_elem = get_element_by_xpath(xpath.clone(), &self.ui_tree);

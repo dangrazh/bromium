@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::env;
 
 static LOGGER: BromiumLogger = BromiumLogger;
 static LOG_LEVEL: Mutex<LevelFilter> = Mutex::new(LevelFilter::Debug); // Default log level
@@ -13,20 +14,21 @@ static LOG_TO_FILE: Mutex<bool> = Mutex::new(true);
 
 // Predefined default log directory
 #[cfg(target_os = "windows")]
-const DEFAULT_LOG_DIR: &str = r"C:\bromium_logs";
+const DEFAULT_LOG_DIR: &str = "/tmp/bromium_logs";
 #[cfg(not(target_os = "windows"))]
 const DEFAULT_LOG_DIR: &str = "/tmp/bromium_logs";
 
 struct BromiumLogger;
 
 fn get_default_log_path() -> PathBuf {
-    let log_dir = PathBuf::from(DEFAULT_LOG_DIR);
+    // let log_dir = PathBuf::from(DEFAULT_LOG_DIR);
+    let log_dir = env::temp_dir().join("bromium_logs");
     
     // Create the directory if it doesn't exist
     if !log_dir.exists() {
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
             // If we can't create the default directory, fall back to temp
-            eprintln!("Failed to create default log directory {}: {}", DEFAULT_LOG_DIR, e);
+            eprintln!("Failed to create default log directory {}: {}", log_dir.to_str().unwrap_or("faild to display log_dir PathBuf"), e);
             // Fallback to temp directory
             if let Ok(temp_dir) = std::env::var("TEMP").or_else(|_| std::env::var("TMP")) {
                 let fallback = PathBuf::from(temp_dir).join("bromium_logs");

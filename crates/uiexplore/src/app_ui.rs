@@ -415,13 +415,11 @@ impl UIExplorer {
                         ui.add_space(2.0);
                         ui.label(" | ");
                         ui.add_space(2.0);
-                        // ui.vertical(|ui| {
+                        ui.label(format!("{} Elements detected", self.ui_tree.get_elements().len()));
                         ui.add_space(2.0);
                         ui.label(" | ");
                         ui.add_space(2.0);
-                        ui.label(format!("{} Elements detected | Screeninfo: {}x{} @ {:.1}x", self.ui_tree.get_elements().len(), self.app_context.screen_width, self.app_context.screen_height, self.app_context.screen_scale));
-                        // ui.label(format!("Elements detected: {}", self.ui_tree.get_elements().len()));                  
-                        // });
+                        ui.label(format!("Screeninfo: {}x{} @ {:.1}x", self.app_context.screen_width, self.app_context.screen_height, self.app_context.screen_scale));
                         ui.add_space(2.0);
                     },
                     _ => {

@@ -4,18 +4,23 @@ Bromium as a project aims to provide the required infrastructure to automate tas
 - the bromium Python library that provides bindings to interact with the Windows UI Automation API through Rust. It enables users to automate tasks and interact with Windows UI elements programmatically.
 - the UI Expore Desktop application (inspired by inspect.exe) which allows users to inspect the current Windows Desktop, get xpath locators to any ui element on the desktop and test custom xpah locators. It can be run without a need to install the application and without admin rights. This can be built from source by cloning the github repository https://github.com/dangrazh/bromium/
 
-## Features
+## Key Features of python library
 
+- Get representation of all UI elements on the current desktop (UI tree)
+- Launch an application or activate an already running appliation window
+- Interact with UI elements on the current desktop
+- Get screen context information (size, scaling, etc.)
+- Take screen shots
 - Get cursor position coordinates
 - Retrieve UI element information at specific coordinates
-- Get screen context information (size and scaling)
 
 
-<!-- ## Installation
+
+## Installation
 
 ```bash.\
 pip install bromium
-``` -->
+```
 
 ## Usage
 
@@ -23,30 +28,75 @@ Here's a basic example of how to use Bromium:
 
 ```python
 from bromium import WinDriver
+import time
+import os
 
-# Create a WinDriver instance with a timeout value
-driver = WinDriver(timeout=5)
+def demo_app_launch():
+    print("Testing bromium app launch/activation functionality...")
+    
+    # Create a WinDriver instance
+    print("Getting WinDriver Instance...")
+    driver = WinDriver(timeout_ms=5)
+    print("WinDriver instance obtained.")
+    no_of_elements = driver.get_no_of_ui_elements()
+    print(f"Driver has {no_of_elements} elements.")
+    # Path to Windows Calculator (available on all Windows systems)
+    # app_path = r"C:\Windows\System32\calc.exe"
+    # XPath for Calculator
+    # This is a sample XPath for the Calculator window and the "9" button
+    # xpath = r'/Pane[@ClassName="#32769"][@Name="Desktop 1"]/Window[@ClassName="ApplicationFrameWindow"][@Name="Calculator"]/Window[@ClassName="Windows.UI.Core.CoreWindow"][@Name="Calculator"]/Custom[@AutomationId="NavView"]/Group[@ClassName="LandmarkTarget"]/Group[@Name="Number pad"][@AutomationId="NumberPad"]/Button[@Name="Nine"][@AutomationId="num9Button"]'
 
-# Get current cursor position
-x, y = driver.get_curser_pos()
-print(f"Cursor position: ({x}, {y})")
+    # Path to MS Teams
+    app_path = r"ms-teams.exe"
+    # XPath for MS Teams
+    # This is a sample XPath for the Teams window 
+    xpath = r"/Pane[@Name='Desktop 1']/Window[@Name='Microsoft Teams']"
 
-# Get UI element at specific coordinates
-element = driver.get_ui_element(x, y)
-print(f"UI Element name: {element.get_name()}")
+    file_name = os.path.basename(app_path)
+    print(f"Launching/activating {file_name} with path: {app_path}")
+    
+    # Try to launch or activate the application
+    try:
+        app_window = driver.launch_or_activate_app(app_path, xpath)
+        print(f"First attempt to launch/activate {file_name} returned: {app_window}")
+        print(f"{app_window} should now be in focus")
+            
+        # Wait a moment to observe the result
+        time.sleep(3)
+        
+        # Reload the driver to ensure we have the latest UI tree
+        driver = driver.reload()
+        no_of_elements = driver.get_no_of_ui_elements()
+        print(f"Driver reloaded to refresh UI tree. It now has {no_of_elements} elements.")
+ 
+        # Teams login - if required
+        xpath_login_button = r"//Button[@Name='Sign in']"
+        try:
+            login_button = driver.get_ui_element_by_xpath(xpath_login_button)
+            # if this does not raise an exception, the button was found, hence we need to login
+            print("Login button found, performing login...")
+            login_button.send_click()
+            print("Clicked the login button.")
+            # give it some time to process
+            time.sleep(2)
+            driver.refresh_ui_tree()
+            xpath_username = r"//Edit[@Name='E-Mail-Adresse, Telefonnummer oder Skype-Name']"
+            try:
+                username_field = driver.get_ui_element_by_xpath(xpath_username)
+                username_field.send_keys("john.doe@gmail.com")
+            except Exception as e:
+                print("Username field not found, aborting login.")
 
-# Get screen context information
-screen_context = driver.get_screen_context()
-print(f"Screen width: {screen_context.get_screen_width()}")
-print(f"Screen height: {screen_context.get_screen_height()}")
-print(f"Screen scale: {screen_context.get_screen_scale()}")
 
-# Launch or activate an application
-app_path = r"C:\Windows\System32\calc.exe"
-xpath = r'/Window[@ClassName="ApplicationFrameWindow"][@Name="Calculator"]'
-success = driver.launch_or_activate_app(app_path, xpath)
-if success:
-    print("Calculator is now in focus")
+        except Exception as e:
+            print("Login button not found, assuming already logged in.")
+    except Exception as e:
+        print(f"Error during launch/activation of {file_name}: {e}")        
+    
+    print("Test completed!")
+
+if __name__ == "__main__":
+    demo_app_launch()
 ```
 
 ## API Reference

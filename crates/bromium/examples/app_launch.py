@@ -43,7 +43,7 @@ def demo_app_launch():
         # Teams login - if required
         xpath_login_button = r"//Button[@Name='Sign in']"
         try:
-            login_button = driver.get_ui_element_by_xpath(xpath_login_button)
+            login_button = driver.get_element_by_xpath(xpath_login_button)
             # if this does not raise an exception, the button was found, hence we need to login
             print("Login button found, performing login...")
             login_button.send_click()
@@ -53,7 +53,7 @@ def demo_app_launch():
             driver.refresh_ui_tree()
             xpath_username = r"//Edit[@Name='E-Mail-Adresse, Telefonnummer oder Skype-Name']"
             try:
-                username_field = driver.get_ui_element_by_xpath(xpath_username)
+                username_field = driver.get_element_by_xpath(xpath_username)
                 username_field.send_keys("john.doe@gmail.com")
             except Exception as e:
                 print("Username field not found, aborting login.")
