@@ -12,7 +12,7 @@ members = [
 [workspace.dependencies]
 uiautomation = "0.22.2"
 chrono = "0.4.41"
-log = "0.4"
+log = {version = "0.4", features = ["std"] }
 windows = { version = "0.61.1", features = ["Win32_Graphics_Gdi", "Win32_Foundation", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility"] }
 
 [profile.release-with-debug]

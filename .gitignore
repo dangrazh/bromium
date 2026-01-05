@@ -57,6 +57,7 @@ pip-delete-this-directory.txt
 pip-selfcheck.json
 
 # Unit test / coverage reports
+tests/
 htmlcov/
 .tox/
 .coverage

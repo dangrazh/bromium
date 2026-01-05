@@ -1,7 +1,8 @@
+#![allow(dead_code)]
 use log::{LevelFilter, Metadata, Record}; // Level
 use pyo3::prelude::*;
 use std::sync::Mutex;
-use std::fs::{File, OpenOptions};
+use std::fs::{ OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::env;
@@ -90,8 +91,8 @@ impl log::Log for BromiumLogger {
 pub enum LogLevel {
     Error,
     Warn,
-    Info,
-    Debug,  // Default level
+    Info, // Default level
+    Debug,  
     Trace,
 }
 
@@ -132,6 +133,7 @@ pub fn set_log_level_internal(level: LevelFilter) {
     log::set_max_level(level);
 }
 
+/*
 #[pyfunction]
 pub fn set_log_level(level: LogLevel) -> PyResult<()> {
     set_log_level_internal(level.into());
@@ -252,3 +254,4 @@ pub fn reset_log_file() -> PyResult<()> {
     }
     Ok(())
 }
+*/

@@ -1,3 +1,4 @@
+from typing import Tuple, Optional, Literal
 # This is a stub file for the bromium module, which provides a Windows driver for the MS Windows operating system.
 
 class Element:
@@ -210,7 +211,7 @@ class WinDriver:
     - refresh(self) -> None: Refreshes the internal UI tree representation.
     """
     
-    def __init__(self, timeout_ms: int) -> None:
+    def __init__(self, log_path: Optional[str], log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]], enable_console: Optional[bool], enable_file: Optional[bool], timeout_ms: int) -> None:
         """
         Initializes the WinDriver instance with a timeout in milliseconds.
         

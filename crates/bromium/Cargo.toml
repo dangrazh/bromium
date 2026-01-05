@@ -1,6 +1,6 @@
 [package]
 name = "bromium"
-version = "0.5.8"
+version = "0.6.0"
 edition = "2024"
 readme = "README.md"
 description = "A Python extension for UI Automation on Windows."
