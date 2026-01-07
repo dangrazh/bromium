@@ -33,10 +33,14 @@ import os
 
 def demo_app_launch():
     print("Testing bromium app launch/activation functionality...")
-    
+
+    # Initialize Bromium logging
+    print("Initializing Bromium logging...")
+    Bromium.init_logging(log_path=None, log_level=None, enable_console=True, enable_file=True)
+
     # Create a WinDriver instance
     print("Getting WinDriver Instance...")
-    driver = WinDriver(timeout_ms=5)
+    driver = WinDriver(timeout_ms=5_000)
     print("WinDriver instance obtained.")
     no_of_elements = driver.get_no_of_ui_elements()
     print(f"Driver has {no_of_elements} elements.")
@@ -101,9 +105,26 @@ if __name__ == "__main__":
 
 ## API Reference
 
+### Bromium
+
+A class providing access to static methods to initialize and control the logging system of bromium and allowing to obtain new WinDriver instances (simply wrapping a call to the constructor of the WinDriver Class).
+
+### Static Methods
+- `get_version -> str`: Returns the current version of the bromium module.
+- `get_win_driver -> WinDriver`: Return a new WinDriver object.
+- `init_logging(log_path: Optional[str], log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]], enable_console: Optional[bool], enable_file: Optional[bool]) -> None`: Initializes logging with the given parameters.
+- `get_log_file() -> str:` Returns the current log file path. Returns default path if not set.
+- `set_log_file(path: str) -> None:` Sets the full path for the log file. Creates parent directories if needed.
+- `set_log_directory(dir_path: str) -> None:` Sets a custom directory for log files. A timestamped log file will be created in this directory.
+- `set_log_level(level: Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]) -> None:` Sets the logging level for the bromium module.
+- `get_log_level() -> str:` Returns the current logging level.
+- `enable_console_logging(enable: bool) -> None:` Enable or disable console logging.
+- `enable_file_logging(enable: bool) -> None:` Enable or disable file logging.
+- `reset_log_file() -> None:` Clear all contents from the current log file.
+
 ### WinDriver
 
-The main class for interacting with Windows UI elements.
+The main class for interacting with the Windows UI tree.
 
 #### Constructor
 
