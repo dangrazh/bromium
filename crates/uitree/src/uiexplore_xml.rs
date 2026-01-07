@@ -3,7 +3,7 @@ use crate::conversion::ConvertFromControlType;
 use crate::save_ui_element::{SaveUIElement, get_ui_automation_instance};
 
 // use crate::commons::FileWriter;
-use crate::{printfmt, UITreeMap};
+use crate::{UITreeMap};
 use xmlutil::{XpathQueryResult}; //Xot
 use xmlutil::xml::{XMLDomWriter, XMLDomNode};
 use xmlutil::xpath_gen::get_xpath_full_from_runtime_id; //get_xpath_from_runtime_id, 
@@ -16,6 +16,7 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use uiautomation::core::UIAutomation;
 use uiautomation::{UIElement, UITreeWalker};
 
+use log::{error, warn, info, debug, trace};
 
 #[derive(Debug, Clone)]
 pub struct UIElementInTree {
@@ -135,7 +136,7 @@ impl UITree {
                 return Some(ui_elem);
             },
             _ => {
-                printfmt!("Warning: XPath expression returned {} results, expected only 1 result. Returning the first result.", xpath_result.get_result_count());
+                warn!("Warning: XPath expression returned {} results, expected only 1 result. Returning the first result.", xpath_result.get_result_count());
                 return None;
             }
         }
@@ -154,8 +155,8 @@ impl UITree {
     pub fn append_or_replace_subtree(&mut self, parent_index: usize, mut subtree: UITree) -> Result<usize, String> {
         // Append the subtree to the current tree at the specified parent index
         // Return the index of the new subtree root in the current tree
-        // printfmt!("Parent index to append subtree: {}", parent_index);
-        // printfmt!("Appending or replacing subtree with root: {}", subtree.get_tree().node(subtree.root()).name);
+        trace!("Parent index to append subtree: {}", parent_index);
+        trace!("Appending or replacing subtree with root: {}", subtree.get_tree().node(subtree.root()).name);
         let subtree_root = subtree.root();
         let subtree_node = subtree.get_tree().node(subtree_root);
         let subtree_save_ui_elem = &subtree_node.data;
@@ -163,6 +164,7 @@ impl UITree {
 
         // Check if the parent index exists in the current tree
         if !self.get_tree().has_node(parent_index) {
+            error!("Parent index {} does not exist in the current tree", parent_index);
             return Err("Parent index does not exist in the current tree".to_string());
         }
 
@@ -171,7 +173,7 @@ impl UITree {
             // Find the existing node index and remove it along with its children
             let existing_node = self.get_tree().get_element_by_runtime_id(&subtree_runtime_id).unwrap();
             let existing_node_index = existing_node.index;
-            // printfmt!("Subtree root already exists in the current tree at index {}. Replacing existing subtree.", existing_node_index);
+            debug!("Subtree root already exists in the current tree at index {}. Replacing existing subtree.", existing_node_index);
             // Remove the existing node and its children
             self.get_tree_mut().remove_node(existing_node_index)?;
         }
@@ -179,7 +181,7 @@ impl UITree {
         // Add the root of the subtree to the current tree
         let tree_mut = self.get_tree_mut();
         let new_index = tree_mut.add_child(parent_index, &subtree_node.name, &subtree_runtime_id, subtree_save_ui_elem.clone());
-        // printfmt!("Added subtree root to current tree at index {}", new_index);
+        debug!("Added subtree root to current tree at index {}", new_index);
 
         // replace the ui_elements vector with the new elements from the subtree
         remove_in_place(self.get_elements_mut(), subtree.get_elements_mut());
@@ -188,7 +190,7 @@ impl UITree {
         self.get_elements_mut().append(subtree.get_elements_mut());
 
         // sorting the elements by z_order and then by ascending size of the bounding rectangle
-        printfmt!("Sorting UI elements by size and z-order...");
+        info!("Sorting UI elements by size and z-order...");
         self.get_elements_mut().sort_by(|a, b| a.get_element_props().get_bounding_rect_size().cmp(&b.get_element_props().get_bounding_rect_size()));
         self.get_elements_mut().sort_by(|a, b| a.get_element_props().get_z_order().cmp(&b.get_element_props().get_z_order()));
 
@@ -202,7 +204,7 @@ impl UITree {
         let current_xml_dom_tree = self.get_xml_dom_tree();
         // 2. get the xml_dom_tree of the subtree
         let subtree_xml_dom_tree = subtree.get_xml_dom_tree();
-        printfmt!("Merging XML DOM trees... adding new subtree: {}", subtree_xml_dom_tree);
+        info!("Merging XML DOM trees... adding new subtree: {}", subtree_xml_dom_tree);
         let new_xml_dom_tree = append_or_replace_node_by_rt_id(current_xml_dom_tree, subtree_xml_dom_tree, &subtree_runtime_id);
         self.xml_dom_tree = new_xml_dom_tree;
 
@@ -212,7 +214,7 @@ impl UITree {
 
     fn append_children(&mut self, parent_index: usize, mut subtree: &mut UITree, subtree_index: usize) -> Result<(), String> {
         let children = subtree.get_tree().children(subtree_index).to_vec();
-        // printfmt!("Appending {} children to parent index {}", children.len(), parent_index);
+        debug!("Appending {} children to parent index {}", children.len(), parent_index);
         for child_index in children {
             let child_node = subtree.get_tree().node(child_index);
             let child_save_ui_elem = &child_node.data;
@@ -332,7 +334,7 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
     let xml_dom_tree = xml_writer.to_string().unwrap();
 
     // sorting the elements by z_order and then by ascending size of the bounding rectangle
-    printfmt!("Sorting UI elements by size and z-order...");
+    info!("Sorting UI elements by size and z-order...");
     ui_elements.sort_by(|a, b| a.get_element_props().get_bounding_rect_size().cmp(&b.get_element_props().get_bounding_rect_size()));
     ui_elements.sort_by(|a, b| a.get_element_props().get_z_order().cmp(&b.get_element_props().get_z_order()));
 
@@ -344,10 +346,10 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
     let ui_tree = UITree::new(tree, xml_dom_tree, ui_elements);
 
     // send the tree containing all UI elements back to the main thread
-    printfmt!("Sending UI tree with {} elements to the main thread...", ui_tree.get_elements().len());
+    info!("Sending UI tree with {} elements to the main thread...", ui_tree.get_elements().len());
     match tx.send(ui_tree) {
-        Ok(_) => {printfmt!("UI tree sent successfully.");}
-        Err(e) => {printfmt!("Error sending UI tree: {:?}", e);}
+        Ok(_) => {info!("UI tree sent successfully.");}
+        Err(e) => {error!("Error sending UI tree: {:?}", e);}
     };
 
 }
@@ -400,7 +402,7 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
     let xml_dom_tree = xml_writer.to_string().unwrap();
 
     // sorting the elements by z_order and then by ascending size of the bounding rectangle
-    printfmt!("Sorting UI elements by size and z-order...");
+    info!("Sorting UI elements by size and z-order...");
     ui_elements.sort_by(|a, b| a.get_element_props().get_bounding_rect_size().cmp(&b.get_element_props().get_bounding_rect_size()));
     ui_elements.sort_by(|a, b| a.get_element_props().get_z_order().cmp(&b.get_element_props().get_z_order()));
 
@@ -410,7 +412,7 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
 
     // pack the tree and ui_elements vector into a single struct
     let mut ui_tree = UITree::new(tree, xml_dom_tree, ui_elements);
-    // printfmt!("This is the top level tree we are processing:\n{}", ui_tree.get_xml_dom_tree());
+    debug!("This is the top level tree we are processing:\n{}", ui_tree.get_xml_dom_tree());
 
 
     // special handling to skip duplicate root node in processing
@@ -420,10 +422,10 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
     let mut root_first_child_idx: usize = 0;
     match root_first_child {
         None => {
-            printfmt!("No child elements found under the root element. Sending empty UI tree.");
+            warn!("No child elements found under the root element. Sending empty UI tree.");
             match tx.send(ui_tree.clone()) {
-                Ok(_) => {printfmt!("UI tree sent successfully.");}
-                Err(e) => {printfmt!("Error sending UI tree: {:?}", e);}
+                Ok(_) => {info!("UI tree sent successfully.");}
+                Err(e) => {error!("Error sending UI tree: {:?}", e);}
             };
         },
         Some(val) => {
@@ -437,7 +439,7 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
 
     let child_indices = ui_tree.get_tree().children(root_first_child_idx);
     let mut child_elements = Vec::new();
-    // printfmt!("children to process in parallel: {}", child_indices.len());
+    trace!("children to process in parallel: {}", child_indices.len());
     for &child_index in child_indices {
         let child_node = ui_tree.get_tree().node(child_index);
         let child_save_ui_elem = &child_node.data;
@@ -451,7 +453,7 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
         // Spawn a new thread for each element to process it in parallel
         let tx_par_clone = tx_par.clone();
          let calling_window_caption_n = calling_window_caption.clone();
-        //  printfmt!("Spawning thread to process element: '{}'", element.get_name());
+         debug!("Spawning thread to process element: '{}'", element.get_name());
         let handle = std::thread::spawn(move || {
             // get_all_elements_par_xml(tx, None, None);
             get_all_elements_xml(tx_par_clone, Some(element), max_depth, calling_window_caption_n);
@@ -460,7 +462,7 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
     }
 
     // get the subtrees from the threads
-    // printfmt!("Collecting subtrees from threads...");
+    debug!("Collecting subtrees from threads...");
     let mut subtrees = Vec::new();
     for _i in child_elements {
         let subtree: UITree = rx_par.recv().unwrap();
@@ -468,20 +470,20 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
     }
 
     // ensure all threads have completed
-    // printfmt!("Waiting for all threads to complete...");
+    trace!("Waiting for all threads to complete...");
     for handle in handles {
         handle.join().unwrap();
     }
 
     // append the subtrees to the main tree
-    // printfmt!("Appending {} subtrees to the main tree...", subtrees.len());
+    debug!("Appending {} subtrees to the main tree...", subtrees.len());
     for subtree in subtrees {
         // !("This is the tree we are appending:\n{}", subtree.get_xml_dom_tree());
         match ui_tree.append_or_replace_subtree(ui_tree.get_tree().root(), subtree) {
             Ok(_) => {},
-            Err(e) => {printfmt!("Error appending subtree: {}", e);}
+            Err(e) => {error!("Error appending subtree: {}", e);}
         }
-        printfmt!("UI tree has now {} elements", ui_tree.get_elements().len());
+        debug!("UI tree has now {} elements", ui_tree.get_elements().len());
     }
     
     // TODO: merging the xml_dom_tree strings into a single xml_dom_tree string
@@ -489,10 +491,10 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
 
 
     // send the tree containing all UI elements back to the main thread
-    printfmt!("Sending UI tree with {} elements to the main thread...", ui_tree.get_elements().len());
+    info!("Sending UI tree with {} elements to the main thread...", ui_tree.get_elements().len());
     match tx.send(ui_tree) {
-        Ok(_) => {printfmt!("UI tree sent successfully.");}
-        Err(e) => {printfmt!("Error sending UI tree: {:?}", e);}
+        Ok(_) => {info!("UI tree sent successfully.");}
+        Err(e) => {error!("Error sending UI tree: {:?}", e);}
     };
 
 }
@@ -508,7 +510,7 @@ fn get_element(mut tree: &mut UITreeMap<SaveUIElement>, mut ui_elements: &mut Ve
     if let Some(caption) = &calling_window_caption {
         if let Ok(name) = element.get_name() {
             if name == *caption {
-                // printfmt!("Skipping element with caption: {}", caption);
+                trace!("Skipping element with caption: {}", caption);
                 return;
             }
         }
@@ -552,7 +554,7 @@ fn get_element(mut tree: &mut UITreeMap<SaveUIElement>, mut ui_elements: &mut Ve
     // Walking the children of the current element
     if let Ok(child) = walker.get_first_child(&element) {
         // getting child elements
-        // printfmt!("Found child element: {}", child.get_name().unwrap_or("Unknown".to_string()));
+        trace!("Found child element: {}", child.get_name().unwrap_or("Unknown".to_string()));
         get_element(&mut tree, &mut ui_elements, parent, walker, &child, curr_xml_dom_node, level + 1, z_order, max_depth, calling_window_caption.clone());
         let mut next = child;
         // walking siblings
@@ -561,7 +563,7 @@ fn get_element(mut tree: &mut UITreeMap<SaveUIElement>, mut ui_elements: &mut Ve
             if level + 1 == 1 {
                 z_order += 1;
             }
-            // printfmt!("Found sibling element: {}", sibling.get_name().unwrap_or("Unknown".to_string()));
+            trace!("Found sibling element: {}", sibling.get_name().unwrap_or("Unknown".to_string()));
             get_element(&mut tree, &mut ui_elements, parent, walker, &sibling, curr_xml_dom_node,  level + 1, z_order, max_depth, calling_window_caption.clone());
             next = sibling;
         }
