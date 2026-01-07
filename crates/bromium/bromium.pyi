@@ -31,6 +31,105 @@ class Bromium:
         """
         pass
 
+    @staticmethod
+    def get_version() -> str:
+        """
+        Get the current Bromium module version.
+        
+        Returns:
+        - str: The current Bromium module version
+        """
+        pass
+    
+    @staticmethod
+    def get_log_file() -> str:
+        """
+        Get the current log file path. Returns default path if not set.
+        
+        Returns:
+        - str: The current log file path
+        """
+        pass
+
+    @staticmethod
+    def set_log_file(path: str) -> None:
+        """
+        Set the full path for the log file. Creates parent directories if needed.
+        
+        Parameters:
+        - path (str): Full path to the log file
+        
+        Example:
+            import bromium
+            bromium.set_log_file("D:/my_logs/bromium_custom.log")
+        """
+        pass
+
+    @staticmethod
+    def set_log_directory(dir_path: str) -> None:
+        """
+        Set a custom directory for log files. A timestamped log file will be created in this directory.
+        
+        Parameters:
+        - dir_path (str): Directory path where log files should be created
+        
+        Example:
+            import bromium
+            bromium.set_log_directory("D:/my_custom_logs")
+        """
+        pass
+
+    @staticmethod
+    def set_log_level(level: Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]) -> None:
+        """
+        Set the logging level for the bromium module.
+        
+        Parameters:
+        - level (Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]): The desired log level
+        
+        Example:
+            import bromium
+            bromium.set_log_level("Info")
+        """
+        pass
+
+    @staticmethod
+    def get_log_level() -> str:
+        """
+        Get the current logging level.
+        
+        Returns:
+        - str: The current log level as a string
+        """
+        pass
+
+    @staticmethod
+    def enable_console_logging(enable: bool) -> None:
+        """
+        Enable or disable console logging.
+        
+        Parameters:
+        - enable (bool): True to enable console logging, False to disable it.
+        """
+        pass
+
+    @staticmethod
+    def enable_file_logging(enable: bool) -> None:
+        """
+        Enable or disable file logging.
+        
+        Parameters:
+        - enable (bool): True to enable file logging, False to disable it.
+        """
+        pass
+
+    @staticmethod
+    def reset_log_file() -> None:
+        """
+        Clear all contents from the current log file.
+        """
+        pass
+
 class Element:
     """
     A class representing a UI element in the Windows UI Automation API.
@@ -226,7 +325,7 @@ class WinDriver:
     - timeout_ms (int): timeout in milliseconds for the driver to respond.
     - ui_tree (UITree): internal representation of the UI hierarchy
     - tree_needs_update (bool): flag indicating if the UI tree needs to be refreshed
-        
+
     Methods:
     - __init__(self, timeout_ms: int) -> None: Initializes the WinDriver instance with a timeout in milliseconds.
     - __repr__(self) -> str: Returns a string representation of the Windriver instance.

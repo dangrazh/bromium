@@ -1,9 +1,13 @@
-from bromium import WinDriver
+from bromium import Bromium, WinDriver
 import time
 import os
 
 def demo_app_launch():
     print("Testing bromium app launch/activation functionality...")
+    
+    #initialize Bromium logging
+    print("Initializing Bromium logging...")
+    Bromium.init_logging(log_path=None, log_level=None, enable_console=True, enable_file=True)
     
     # Create a WinDriver instance
     print("Getting WinDriver Instance...")

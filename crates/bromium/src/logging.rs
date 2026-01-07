@@ -56,7 +56,7 @@ impl log::Log for BromiumLogger {
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
             let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-            let log_message = format!("{}: - {} ({}) - {} - {}", timestamp, record.module_path().unwrap_or("soure mofule unknown"), record.line().unwrap_or(0), record.level(), record.args());
+            let log_message = format!("{}: - {} - {} [{} - Line {}]", timestamp, record.level(), record.args(), record.module_path().unwrap_or("soure module unknown"), record.line().unwrap_or(0));
             
             // Log to console if enabled
             if *LOG_TO_CONSOLE.lock().unwrap() {
@@ -96,6 +96,21 @@ pub enum LogLevel {
     Info, // Default level
     Debug,  
     Trace,
+    Off,
+}
+
+impl From<&str> for LogLevel {
+    fn from(level_str: &str) -> Self {
+        match level_str.to_lowercase().as_str() {
+            "error" => LogLevel::Error,
+            "warn" | "warning" => LogLevel::Warn,
+            "info" => LogLevel::Info,
+            "debug" => LogLevel::Debug,
+            "trace" => LogLevel::Trace,
+            "off" => LogLevel::Off, // Treat "off" as Error to minimize logs
+            _ => LogLevel::Info, // Default to Info if unrecognized
+        }
+    }
 }
 
 impl From<LogLevel> for LevelFilter {
@@ -106,6 +121,7 @@ impl From<LogLevel> for LevelFilter {
             LogLevel::Info => LevelFilter::Info,
             LogLevel::Debug => LevelFilter::Debug,
             LogLevel::Trace => LevelFilter::Trace,
+            LogLevel::Off => LevelFilter::Off,
         }
     }
 }
@@ -153,7 +169,7 @@ pub fn init_logger(log_dir: Option<PathBuf>, log_level: LevelFilter, enable_cons
         // set log level
         set_log_level_internal(log_level);        
         
-        log::info!("Logger initialized with default level: Debug");
+        log::info!("Logger initialized with log level: {}", log_level);
         log::info!("Default log file: {}", log_file.display());
     });
 }
@@ -165,20 +181,20 @@ pub fn set_log_level_internal(level: LevelFilter) {
 }
 
 
-#[pyfunction]
+// #[pyfunction]
 pub fn set_log_level(level: LogLevel) -> PyResult<()> {
     set_log_level_internal(level.into());
     log::info!("Log level set to: {:?}", level);
     Ok(())
 }
 
-#[pyfunction]
+// #[pyfunction]
 pub fn get_log_level() -> PyResult<String> {
     let level = LOG_LEVEL.lock().unwrap();
     Ok(format!("{:?}", *level))
 }
 
-#[pyfunction]
+// #[pyfunction]
 pub fn set_log_file(path: String) -> PyResult<()> {
     let path_buf = PathBuf::from(&path);
     
@@ -203,7 +219,7 @@ pub fn set_log_file(path: String) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction]
+// #[pyfunction]
 pub fn set_log_directory(dir_path: String) -> PyResult<()> {
     let dir_path_buf = PathBuf::from(&dir_path);
     
@@ -228,7 +244,7 @@ pub fn set_log_directory(dir_path: String) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction]
+// #[pyfunction]
 pub fn get_log_file() -> PyResult<String> {
     let mut log_file = LOG_FILE.lock().unwrap();
     
@@ -240,19 +256,19 @@ pub fn get_log_file() -> PyResult<String> {
     Ok(log_file.as_ref().unwrap().to_string_lossy().to_string())
 }
 
-#[pyfunction]
-pub fn get_default_log_directory() -> PyResult<String> {
-    Ok(DEFAULT_LOG_DIR.to_string())
-}
+// #[pyfunction]
+// pub fn get_default_log_directory() -> PyResult<String> {
+//     Ok(DEFAULT_LOG_DIR.to_string())
+// }
 
-#[pyfunction]
+// #[pyfunction]
 pub fn enable_console_logging(enable: bool) -> PyResult<()> {
     *LOG_TO_CONSOLE.lock().unwrap() = enable;
     log::info!("Console logging {}", if enable { "enabled" } else { "disabled" });
     Ok(())
 }
 
-#[pyfunction]
+// #[pyfunction]
 pub fn enable_file_logging(enable: bool) -> PyResult<()> {
     // Ensure we have a log file path (use default if not set)
     if enable {
@@ -269,7 +285,7 @@ pub fn enable_file_logging(enable: bool) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction]
+// #[pyfunction]
 pub fn reset_log_file() -> PyResult<()> {
     let log_file = LOG_FILE.lock().unwrap();
     

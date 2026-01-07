@@ -67,6 +67,53 @@ impl Bromium {
         let driver = WinDriver::new(timeout_ms)?;
         PyResult::Ok(driver)
     }
+
+    #[staticmethod]
+    pub fn get_version() -> PyResult<String> {
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        PyResult::Ok(version)
+    }
+
+    #[staticmethod]
+    pub fn get_log_file() -> PyResult<String> {
+        logging::get_log_file()
+    }
+
+    #[staticmethod]
+    pub fn set_log_file(log_file: &str) -> PyResult<()> {
+        logging::set_log_file(log_file.to_string())
+    }
+
+    #[staticmethod]
+    pub fn get_log_level() -> PyResult<String> {
+        logging::get_log_level()
+    }
+
+    #[staticmethod]
+    pub fn set_log_level(log_level: &str) -> PyResult<()> {
+        let level = logging::LogLevel::from(log_level);
+        logging::set_log_level(level)
+    }
+
+    #[staticmethod]
+    pub fn set_log_directory(log_directory: &str) -> PyResult<()> {
+        logging::set_log_directory(log_directory.to_string())
+    }
+
+    #[staticmethod]
+    pub fn enable_console_logging(enable: bool) -> PyResult<()> {
+        logging::enable_console_logging(enable)
+    }
+
+    #[staticmethod]
+    pub fn enable_file_logging(enable: bool) -> PyResult<()> {
+        logging::enable_file_logging(enable)
+    }
+
+    #[staticmethod]
+    pub fn reset_log_file() -> PyResult<()> {
+        logging::reset_log_file()
+    }
 }
 
 #[pyclass]
