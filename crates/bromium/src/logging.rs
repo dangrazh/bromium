@@ -2,7 +2,7 @@
 use log::{LevelFilter, Metadata, Record}; // Level
 use pyo3::prelude::*;
 use std::sync::Mutex;
-use std::fs::{ OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::env;
@@ -21,28 +21,30 @@ const DEFAULT_LOG_DIR: &str = "/tmp/bromium_logs";
 
 struct BromiumLogger;
 
-fn get_default_log_path() -> PathBuf {
+fn get_default_log_file() -> PathBuf {
     // let log_dir = PathBuf::from(DEFAULT_LOG_DIR);
-    let log_dir = env::temp_dir().join("bromium_logs");
-    
-    // Create the directory if it doesn't exist
-    if !log_dir.exists() {
-        if let Err(e) = std::fs::create_dir_all(&log_dir) {
-            // If we can't create the default directory, fall back to temp
-            eprintln!("Failed to create default log directory {}: {}", log_dir.to_str().unwrap_or("faild to display log_dir PathBuf"), e);
-            // Fallback to temp directory
-            if let Ok(temp_dir) = std::env::var("TEMP").or_else(|_| std::env::var("TMP")) {
-                let fallback = PathBuf::from(temp_dir).join("bromium_logs");
+        let mut log_path: PathBuf;
+        let default_path = env::home_dir()
+            .unwrap_or_else(|| env::temp_dir())
+            // .unwrap_or_else(|| PathBuf::from("."))
+            .join(".bromium");
+        log_path = default_path;
+
+        // Ensure log directory exists
+        if !log_path.exists() {
+            if let Err(e) = std::fs::create_dir_all(&log_path) {
+                // If we can't create the default directory, fall back to temp
+                eprintln!("Failed to create default log directory {}: {}", log_path.to_str().unwrap_or("faild to display log_dir PathBuf"), e);
+                let fallback = env::temp_dir().join(".bromium");
                 let _ = std::fs::create_dir_all(&fallback);
-                let timestamp = chrono::Local::now().format("%Y%m%d%H%S").to_string();
-                return fallback.join(format!("bromium_{}.log", timestamp));
+                log_path = fallback;
             }
         }
-    }
-    
-    // Generate filename with timestamp
-    let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
-    log_dir.join(format!("bromium_{}.log", timestamp))
+        
+        // Generate filename with timestamp
+        let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+        let log_file = log_path.join(format!("bromium_{}.log", timestamp));
+        log_file
 }
 
 impl log::Log for BromiumLogger {
@@ -54,7 +56,7 @@ impl log::Log for BromiumLogger {
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
             let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-            let log_message = format!("{}: - bromium - {} - {}", timestamp, record.level(), record.args());
+            let log_message = format!("{}: - {} ({}) - {} - {}", timestamp, record.module_path().unwrap_or("soure mofule unknown"), record.line().unwrap_or(0), record.level(), record.args());
             
             // Log to console if enabled
             if *LOG_TO_CONSOLE.lock().unwrap() {
@@ -67,7 +69,7 @@ impl log::Log for BromiumLogger {
                 let log_path = {
                     let mut log_file = LOG_FILE.lock().unwrap();
                     if log_file.is_none() {
-                        *log_file = Some(get_default_log_path());
+                        *log_file = Some(get_default_log_file());
                     }
                     log_file.clone().unwrap()
                 };
@@ -108,22 +110,51 @@ impl From<LogLevel> for LevelFilter {
     }
 }
 
-pub fn init_logger() {
+pub fn init_logger(log_dir: Option<PathBuf>, log_level: LevelFilter, enable_console: Option<bool>, enable_file: Option<bool>) {
     static INIT: std::sync::Once = std::sync::Once::new();
+    
+        // handle log directory / file if provided, otherwise default to the user's home directory with the temp directory as fallback
+        let mut log_path: PathBuf;
+        if log_dir.is_none() {
+            let default_path = env::home_dir()
+                .unwrap_or_else(|| env::temp_dir())
+                // .unwrap_or_else(|| PathBuf::from("."))
+                .join(".bromium");
+            log_path = default_path;
+        } else {
+            log_path = log_dir.unwrap();
+        }
+
+        // Ensure log directory exists
+        if !log_path.exists() {
+            if let Err(e) = std::fs::create_dir_all(&log_path) {
+                // If we can't create the default directory, fall back to temp
+                eprintln!("Failed to create default log directory {}: {}", log_path.to_str().unwrap_or("faild to display log_dir PathBuf"), e);
+                let fallback = env::temp_dir().join(".bromium");
+                let _ = std::fs::create_dir_all(&fallback);
+                log_path = fallback;
+            }
+        }
+        
+        // Generate filename with timestamp
+        let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+        let log_file = log_path.join(format!("bromium_{}.log", timestamp));
+        *LOG_FILE.lock().unwrap() = Some(log_file.clone());
+
+        // handle console/file logging options
+        *LOG_TO_CONSOLE.lock().unwrap() = enable_console.unwrap_or(false);
+        *LOG_TO_FILE.lock().unwrap() = enable_file.unwrap_or(true);
+    
     INIT.call_once(|| {
         log::set_logger(&LOGGER)
             .map(|()| log::set_max_level(LevelFilter::Trace))
             .expect("Failed to initialize logger");
         
-        // Set default level to Debug
-        set_log_level_internal(LevelFilter::Debug);
-        
-        // Initialize with default log file
-        let default_path = get_default_log_path();
-        *LOG_FILE.lock().unwrap() = Some(default_path.clone());
+        // set log level
+        set_log_level_internal(log_level);        
         
         log::info!("Logger initialized with default level: Debug");
-        log::info!("Default log file: {}", default_path.display());
+        log::info!("Default log file: {}", log_file.display());
     });
 }
 
@@ -133,7 +164,7 @@ pub fn set_log_level_internal(level: LevelFilter) {
     log::set_max_level(level);
 }
 
-/*
+
 #[pyfunction]
 pub fn set_log_level(level: LogLevel) -> PyResult<()> {
     set_log_level_internal(level.into());
@@ -203,7 +234,7 @@ pub fn get_log_file() -> PyResult<String> {
     
     // If no log file set, use default
     if log_file.is_none() {
-        *log_file = Some(get_default_log_path());
+        *log_file = Some(get_default_log_file());
     }
     
     Ok(log_file.as_ref().unwrap().to_string_lossy().to_string())
@@ -227,7 +258,7 @@ pub fn enable_file_logging(enable: bool) -> PyResult<()> {
     if enable {
         let mut log_file = LOG_FILE.lock().unwrap();
         if log_file.is_none() {
-            let default_path = get_default_log_path();
+            let default_path = get_default_log_file();
             log::info!("Using default log file: {}", default_path.display());
             *log_file = Some(default_path);
         }
@@ -254,4 +285,3 @@ pub fn reset_log_file() -> PyResult<()> {
     }
     Ok(())
 }
-*/

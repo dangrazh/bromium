@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 // use windows::UI;
 // use uiautomation::types::Handle;
 
-use crate::instance_logging::InstanceLogger;
+// use crate::instance_logging::InstanceLogger;
 use crate::sreen_context::ScreenContext;
 use crate::uiauto::{get_ui_element_by_runtimeid, supports_invoke, supports_select, invoke_click, select_item}; // get_ui_element_by_xpath, get_element_by_xpath
 use uitree::{SaveUIElementXML, UITreeXML, get_all_elements_xml};
@@ -22,6 +22,7 @@ use fs_extra::dir;
 
 use windows::Win32::Foundation::{POINT, RECT}; //HWND, 
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos}; //WindowFromPoint
+use crate::logging;
 
 use uiautomation::{UIElement}; //UIAutomation, 
 
@@ -30,6 +31,43 @@ use crate::instance_logging::FromStrLevelFilter;
 
 pub static WINDRIVER: Mutex<Option<WinDriver>> = Mutex::new(None);
 
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct Bromium {}
+
+#[pymethods]
+impl Bromium {
+    #[staticmethod]
+    pub fn init_logging(log_path: Option<&str>, log_level: Option<&str>, enable_console: Option<bool>, enable_file: Option<bool>) -> PyResult<()> {
+        // parse log directory if provided, otherwise default to None
+        let log_dir = match log_path {
+            Some(path_str) => Some(std::path::PathBuf::from(path_str)),
+            None => None,
+        };
+        // parse log level if provided, otherwise default to Info
+        let log_level_parsed: log::LevelFilter = match log_level {
+            Some(level_str) => log::LevelFilter::from_str(level_str),
+            None => log::LevelFilter::Info,
+        };
+        logging::init_logger(log_dir, log_level_parsed, enable_console, enable_file);
+        info!("Bromium logging initialized.");
+        PyResult::Ok(())
+    }
+
+    pub fn __repr__(&self) -> PyResult<String> {
+        PyResult::Ok("<Bromium>".to_string())
+    }
+
+    pub fn __str__(&self) -> PyResult<String> {
+        self.__repr__()
+    }
+    #[staticmethod]
+    pub fn get_win_driver(timeout_ms: u64) -> PyResult<WinDriver> {
+        debug!("Bromium::get_win_driver called with timeout: {}ms", timeout_ms);
+        let driver = WinDriver::new(timeout_ms)?;
+        PyResult::Ok(driver)
+    }
+}
 
 #[pyclass]
 #[derive(Debug, Clone)]
@@ -379,7 +417,7 @@ pub struct WinDriver {
     ui_tree: UITreeXML,
     items_in_ui_tree: usize,
     tree_needs_update: bool,
-    instance_logger: InstanceLogger,
+    // instance_logger: InstanceLogger,
     // TODO: Add screen context to get scaling factor later on
 }
 
@@ -392,17 +430,17 @@ impl WinDriver {
 #[pymethods]
 impl WinDriver {
     #[new]
-    pub fn new(log_path: Option<&str>, log_level: Option<&str>, enable_console:Option<bool>, enable_file: Option<bool>, timeout_ms: u64) -> PyResult<Self> {
+    pub fn new(timeout_ms: u64) -> PyResult<Self> {
         
-        let log_dir = match log_path {
-            Some(path_str) => Some(std::path::PathBuf::from(path_str)),
-            None => None,
-        };
-        let log_level_parsed: log::LevelFilter = match log_level {
-            Some(level_str) => log::LevelFilter::from_str(level_str),
-            None => log::LevelFilter::Info,
-        };
-        let logger_instance =InstanceLogger::init_logger(log_dir, log_level_parsed, enable_console, enable_file);
+        // let log_dir = match log_path {
+        //     Some(path_str) => Some(std::path::PathBuf::from(path_str)),
+        //     None => None,
+        // };
+        // let log_level_parsed: log::LevelFilter = match log_level {
+        //     Some(level_str) => log::LevelFilter::from_str(level_str),
+        //     None => log::LevelFilter::Info,
+        // };
+        // let logger_instance =InstanceLogger::init_logger(log_dir, log_level_parsed, enable_console, enable_file);
 
         debug!("Creating new WinDriver with timeout: {}ms", timeout_ms);
 
@@ -418,7 +456,7 @@ impl WinDriver {
         let items_in_ui_tree = ui_tree.get_elements().len();
         debug!("UI tree received with {} elements", items_in_ui_tree);
         
-        let driver = WinDriver { timeout_ms, ui_tree, items_in_ui_tree, tree_needs_update: false, instance_logger: logger_instance };
+        let driver = WinDriver { timeout_ms, ui_tree, items_in_ui_tree, tree_needs_update: false,  };
 
         *WINDRIVER.lock().unwrap() = Some(driver.clone());
 
@@ -653,32 +691,6 @@ impl WinDriver {
         PyResult::Ok(())
     }
 
-    pub fn get_log_file(&self) -> PyResult<String> {
-        debug!("WinDriver::get_log_file called.");
-        let log_file = self.instance_logger.get_log_file();
-        PyResult::Ok(log_file.to_str().unwrap_or("log file not defined").to_string())
-        // PyResult::Ok("Not implemented yet".to_string())
-    }
-
-    pub fn set_log_level(&mut self, log_level: String) -> PyResult<()> {
-        debug!("WinDriver::set_log_level called with level: {}", log_level);
-        let log_level_parsed: log::LevelFilter = log::LevelFilter::from_str(&log_level);
-        debug!("Setting log level to: {:?}", log_level_parsed);
-        self.instance_logger.set_log_level(log_level_parsed);
-        PyResult::Ok(())
-    }
-
-    pub fn set_log_enable_console(&mut self, enable: bool) -> PyResult<()> {
-        debug!("WinDriver::set_log_enable_console called with enable: {}", enable);
-        self.instance_logger.enable_console(enable);
-        PyResult::Ok(())
-    }
-
-    pub fn set_log_enable_file(&mut self, enable: bool) -> PyResult<()> {
-        debug!("WinDriver::set_log_enable_file called with enable: {}", enable);
-        self.instance_logger.enable_file(enable);
-        PyResult::Ok(())
-    }
 
 }
 

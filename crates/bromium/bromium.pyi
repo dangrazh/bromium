@@ -1,5 +1,35 @@
 from typing import Tuple, Optional, Literal
 # This is a stub file for the bromium module, which provides a Windows driver for the MS Windows operating system.
+class Bromium:
+    """
+    A class representing the Bromium module.
+    
+    Methods:
+    - init_logging() -> None: Initializes the logging system for the Bromium module.
+    """
+    
+    @staticmethod
+    def init_logging(log_path: Optional[str], log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]], enable_console: Optional[bool], enable_file: Optional[bool]) -> None:
+        """
+        Initializes the logging system for the Bromium module.
+        
+        This method sets up the logging configuration and prepares the logging system
+        to capture log messages from the Bromium module.
+        """
+        pass
+    
+    @staticmethod
+    def get_win_driver(timeout_ms: int) -> 'WinDriver':
+        """
+        Returns a WinDriver instance with the specified timeout.
+        
+        Parameters:
+        - timeout_ms (int): The timeout value in milliseconds for UI operations.
+        
+        Returns:
+        - WinDriver: An instance of the WinDriver class.
+        """
+        pass
 
 class Element:
     """
@@ -196,7 +226,7 @@ class WinDriver:
     - timeout_ms (int): timeout in milliseconds for the driver to respond.
     - ui_tree (UITree): internal representation of the UI hierarchy
     - tree_needs_update (bool): flag indicating if the UI tree needs to be refreshed
-    
+        
     Methods:
     - __init__(self, timeout_ms: int) -> None: Initializes the WinDriver instance with a timeout in milliseconds.
     - __repr__(self) -> str: Returns a string representation of the Windriver instance.

@@ -36,6 +36,7 @@ fn bromium(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize logger on module import
     // logging::init_logger();
     
+    m.add_class::<windriver::Bromium>()?;
     m.add_class::<windriver::WinDriver>()?;
     m.add_class::<windriver::Element>()?;
     // m.add_class::<logging::LogLevel>()?;
