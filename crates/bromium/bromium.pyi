@@ -19,12 +19,13 @@ class Bromium:
         pass
     
     @staticmethod
-    def get_win_driver(timeout_ms: int) -> 'WinDriver':
+    def get_win_driver(timeout_ms: int, window_title: Optional[str]) -> 'WinDriver':
         """
-        Returns a WinDriver instance with the specified timeout.
+        Returns a WinDriver instance with the specified timeout, filtering by window title if provided.
         
         Parameters:
         - timeout_ms (int): The timeout value in milliseconds for UI operations.
+        - window_title (Optional[str]): The window title to filter by. If None, no filter is applied.
         
         Returns:
         - WinDriver: An instance of the WinDriver class.
@@ -339,13 +340,14 @@ class WinDriver:
     - launch_or_activate_app(self, app_path: str, xpath: str) -> bool: Launches or activates an application.
     - refresh(self) -> None: Refreshes the internal UI tree representation.
     """
-    
-    def __init__(self, log_path: Optional[str], log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]], enable_console: Optional[bool], enable_file: Optional[bool], timeout_ms: int) -> None:
+
+    def __init__(self, timeout_ms: int, window_title: Optional[str]) -> None:
         """
-        Initializes the WinDriver instance with a timeout in milliseconds.
+        Initializes the WinDriver instance with a timeout in milliseconds, filtering by window title if provided.
         
         Parameters:
         - timeout_ms (int): The timeout value in milliseconds for UI operations.
+        - window_title (Optional[str]): The window title to filter by. If None, no filter is applied.
         """
         pass
 
@@ -403,6 +405,15 @@ class WinDriver:
         """
         pass
 
+    def set_window_title(self, window_title: Optional[str]) -> None:
+        """
+        Sets a window title filter for the WinDriver instance.
+        
+        Parameters:
+        - window_title (Optional[str]): The window title to filter by. If None, no filter is applied.
+        """
+        pass
+
     def get_cursor_pos(self) -> tuple[int, int]:
         """
         Returns the current cursor position as a tuple of (x, y) coordinates.
@@ -443,6 +454,18 @@ class WinDriver:
         
         Returns:
         - Element: The Windows UI Automation API UI element of the window at the given xpath.
+        """
+        pass
+
+    def get_elements_by_xpath(self, xpath: str) -> list['Element']:
+        """
+        Returns a list of Windows UI Automation API UI elements matching the given xpath.
+        
+        Parameters:
+        - xpath (str): The xpath of the window.
+        
+        Returns:
+        - list[Element]: A list of Windows UI Automation API UI elements matching the given xpath.
         """
         pass
 

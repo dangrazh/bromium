@@ -25,11 +25,13 @@ uitree = { path = "../uitree" }
 xmlutil = { path = "../xmlutil" }
 
 pyo3 = "0.25.1"
-
-regex = "1.5"
-winapi = { version = "0.3", features = ["winuser"] } # used by app_control.rs
-winnow = "0.7.9"
-display-info = "0.5.4"
 fs_extra = "1.3.0"
+display-info = "0.5.4"
+
+# regex = "1.5"
+# winapi = { version = "0.3", features = ["winuser"] } # used by app_control.rs
+# winnow = "0.7.9"
+
+
 
 

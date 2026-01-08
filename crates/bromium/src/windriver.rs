@@ -62,9 +62,9 @@ impl Bromium {
         self.__repr__()
     }
     #[staticmethod]
-    pub fn get_win_driver(timeout_ms: u64) -> PyResult<WinDriver> {
+    pub fn get_win_driver(timeout_ms: u64, window_title: Option<String>) -> PyResult<WinDriver> {
         debug!("Bromium::get_win_driver called with timeout: {}ms", timeout_ms);
-        let driver = WinDriver::new(timeout_ms)?;
+        let driver = WinDriver::new(timeout_ms, window_title)?;
         PyResult::Ok(driver)
     }
 
@@ -464,6 +464,7 @@ pub struct WinDriver {
     ui_tree: UITreeXML,
     items_in_ui_tree: usize,
     tree_needs_update: bool,
+    window_title: Option<String>,
     // instance_logger: InstanceLogger,
     // TODO: Add screen context to get scaling factor later on
 }
@@ -477,7 +478,7 @@ impl WinDriver {
 #[pymethods]
 impl WinDriver {
     #[new]
-    pub fn new(timeout_ms: u64) -> PyResult<Self> {
+    pub fn new(timeout_ms: u64, window_title: Option<String>) -> PyResult<Self> {
         
         // let log_dir = match log_path {
         //     Some(path_str) => Some(std::path::PathBuf::from(path_str)),
@@ -493,9 +494,10 @@ impl WinDriver {
 
         // get the ui tree in a separate thread
         let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
+        let window_title_1 = window_title.clone();
         thread::spawn(|| {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, None, None);
+            get_all_elements_xml(tx, None, None, None, window_title_1);
         });
         info!("Spawned separate thread to get ui tree");
         
@@ -503,7 +505,7 @@ impl WinDriver {
         let items_in_ui_tree = ui_tree.get_elements().len();
         debug!("UI tree received with {} elements", items_in_ui_tree);
         
-        let driver = WinDriver { timeout_ms, ui_tree, items_in_ui_tree, tree_needs_update: false,  };
+        let driver = WinDriver { timeout_ms, ui_tree, items_in_ui_tree, tree_needs_update: false, window_title };
 
         *WINDRIVER.lock().unwrap() = Some(driver.clone());
 
@@ -527,8 +529,15 @@ impl WinDriver {
         self.ui_tree.get_elements().len()
     }
 
-    pub fn set_timeout(&mut self, timeout_ms: u64) {
+    pub fn set_window_title(&mut self, window_title: Option<String>) -> PyResult<()> {
+        self.window_title = window_title;
+        *WINDRIVER.lock().unwrap() = Some(self.clone());
+        PyResult::Ok(())
+    }
+    pub fn set_timeout(&mut self, timeout_ms: u64) -> PyResult<()> {
         self.timeout_ms = timeout_ms;
+        *WINDRIVER.lock().unwrap() = Some(self.clone());
+        PyResult::Ok(())
     }
 
     pub fn get_cursor_pos(&self) -> PyResult<(i32, i32)> {
@@ -540,9 +549,9 @@ impl WinDriver {
         }
     }
 
-    pub fn refresh(&mut self) -> PyResult<()> {
+    pub fn refresh(&mut self, window_title: Option<String>) -> PyResult<()> {
         debug!("WinDriver::refresh called.");
-        self.refresh_ui_tree()
+        self.refresh_ui_tree(window_title)
     }
 
     pub fn reload(&self) -> PyResult<Self> {
@@ -583,16 +592,40 @@ impl WinDriver {
 
     }
 
-    fn get_element_by_xpath(&self, xpath: String) -> PyResult<Element> {
+    fn get_element_by_xpath(&mut self, xpath: String, timeout_ms: Option<u32>) -> PyResult<Element> {
         debug!("WinDriver::get_ui_element_by_xpath called.");
         
         // let ui_elem = get_element_by_xpath(xpath.clone(), &self.ui_tree);
         debug!("Searching for element with xpath: {}", xpath);
-        debug!("UI Tree has {} elements", self.ui_tree.get_elements().len());
+        trace!("UI Tree has {} elements", self.ui_tree.get_elements().len());
         let ui_elem = self.ui_tree.get_element_by_xpath(xpath.as_str());
+        
         if ui_elem.is_none() {
-            debug!("Element not found for xpath: {}", xpath);
-            return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Element not found"));
+            if let Some(timeout) = timeout_ms {
+                debug!("Element not found, retrying for {} ms.", timeout);
+                let start_time = std::time::Instant::now();
+                while start_time.elapsed().as_millis() < timeout as u128 {
+                    let window_title_filter = self.window_title.clone();
+                    self.refresh_ui_tree(window_title_filter)?;
+                    let ui_elem_retry = self.ui_tree.get_element_by_xpath(xpath.as_str());
+                    if ui_elem_retry.is_none() {
+                        trace!("Element still not found after refresh. trying again.");
+                        // continue looping (no delay via sleep required, ui tree refresh takes ages)...
+                    } else {
+                        debug!("Element found after refresh.");
+                        let element = ui_elem_retry.unwrap();
+                        // PyResult::Ok(element)
+                        let name = element.get_name().clone();
+                        let xpath = xpath.clone();
+                        let handle = element.get_handle();
+                        let runtime_id = element.get_runtime_id().clone();
+                        let bounding_rectangle = element.get_bounding_rectangle();
+                        return PyResult::Ok(Element::new(name, xpath, handle, runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom())));
+                    }
+                }
+                debug!("Element not found after retrying for {} ms.", timeout);
+                return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Element not found after retries"));
+            }
         }
         
         let element = ui_elem.unwrap();
@@ -603,6 +636,34 @@ impl WinDriver {
         let runtime_id = element.get_runtime_id().clone();
         let bounding_rectangle = element.get_bounding_rectangle();
         PyResult::Ok(Element::new(name, xpath, handle, runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom())))
+    }
+
+    fn get_elements_by_xpath(&self, xpath: String) -> PyResult<Vec<Element>> {
+        debug!("WinDriver::get_ui_element_by_xpath called.");
+        
+        // let ui_elem = get_element_by_xpath(xpath.clone(), &self.ui_tree);
+        debug!("Searching for element with xpath: {}", xpath);
+        trace!("UI Tree has {} elements", self.ui_tree.get_elements().len());
+        let ui_elems = self.ui_tree.get_elements_by_xpath(xpath.as_str());
+        if ui_elems.is_none() {
+            debug!("Element not found for xpath: {}", xpath);
+            return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Element not found"));
+        }
+        
+        let elements = ui_elems.unwrap();
+        let mut results: Vec<Element> = Vec::new();
+        // PyResult::Ok(element)
+        for element in &elements {
+            trace!("Found element: {:?}", element);
+            let name = element.get_name().clone();
+            let xpath = xpath.clone();
+            let handle = element.get_handle();
+            let runtime_id = element.get_runtime_id().clone();
+            let bounding_rectangle = element.get_bounding_rectangle();
+            let elem = Element::new(name, xpath, handle, runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom()));
+            results.push(elem);
+        }
+        PyResult::Ok(results)
     }
 
     pub fn get_screen_context(&self) -> PyResult<ScreenContext> {
@@ -691,13 +752,27 @@ impl WinDriver {
         }
     }
 
-    pub fn refresh_ui_tree(&mut self) -> PyResult<()> {
+    pub fn refresh_ui_tree(&mut self, window_title: Option<String>) -> PyResult<()> {
         debug!("WinDriver::refresh called.");
+        
+        // handle optional window title parameter
+        // if a window title is provided, use it to filter the UI tree and
+        // ingore the potentially stored window title in the WinDriver instance
+        let window_title_filter: Option<String>;
+        if window_title.is_none() {
+            if let Some(stored_title) = &self.window_title {
+                window_title_filter = Some(stored_title.clone());
+            } else {
+                window_title_filter = None;
+            }
+        } else {
+            window_title_filter = window_title;
+        }
         // get the ui tree in a separate thread
         let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
         thread::spawn(|| {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, None, None);
+            get_all_elements_xml(tx, None, None, None, window_title_filter);
         });
         info!("Spawned separate thread to refresh ui tree");
         
@@ -721,7 +796,7 @@ impl WinDriver {
         let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
         thread::spawn(|| {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, Some(2 as usize), None);
+            get_all_elements_xml(tx, None, Some(2 as usize), None, None);
         });
         info!("Spawned separate thread to refresh ui tree");
         

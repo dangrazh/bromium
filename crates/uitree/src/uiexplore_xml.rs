@@ -137,11 +137,47 @@ impl UITree {
             },
             _ => {
                 warn!("Warning: XPath expression returned {} results, expected only 1 result. Returning the first result.", xpath_result.get_result_count());
-                return None;
+                let items = xpath_result.get_result_items();
+                let default_result = &XpathQueryResult::default();
+                let itm = items.get(0).unwrap_or(default_result);
+                let runtime_id = itm.get_item_value();
+                let ui_elem = self.get_tree().get_element_by_runtime_id(runtime_id).unwrap();
+                let ui_elem = ui_elem.data.get_element();
+                return Some(ui_elem);                
             }
         }
+    }
 
+    pub fn get_elements_by_xpath(&self, xpath: &str) -> Option<Vec<&SaveUIElement>> {
 
+        // Patch the xpath with /@RtID if it is missing
+        let xpath = if !xpath.ends_with("/@RtID") {xpath.to_string() + "/@RtID"} else {xpath.to_string()};
+
+        let xpath_result = eval_xpath(xpath, self.get_xml_dom_tree().to_string());
+        let mut results: Vec<&SaveUIElement> = Vec::new();
+        match xpath_result.get_result_count() {
+            0 => return None,
+            1 => {
+                let items = xpath_result.get_result_items();
+                let default_result = &XpathQueryResult::default();
+                let itm = items.get(0).unwrap_or(default_result);
+                let runtime_id = itm.get_item_value();
+                let ui_elem = self.get_tree().get_element_by_runtime_id(runtime_id).unwrap();
+                let ui_elem = ui_elem.data.get_element();
+                results.push(ui_elem);
+                return Some(results);
+            },
+            _ => {
+                let items = xpath_result.get_result_items();
+                for itm in items {
+                    let runtime_id = itm.get_item_value();
+                    let ui_elem = self.get_tree().get_element_by_runtime_id(runtime_id).unwrap();
+                    let ui_elem = ui_elem.data.get_element();
+                    results.push(ui_elem);
+                }
+                return Some(results);
+            }
+        }
     }
 
 }
@@ -283,7 +319,7 @@ fn find_node_by_rt_id(xot: &mut xot::Xot, doc: xot::Node, target: &String) -> Op
     None
 }
 
-pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIElement>, max_depth: Option<usize>, calling_window_caption: Option<String>) {   
+pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIElement>, max_depth: Option<usize>, calling_window_caption: Option<String>, target_window_caption: Option<String>) {   
     
     let automation = get_ui_automation_instance().unwrap();
     // control view walker
@@ -307,7 +343,7 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
     let item = format!("'{}' {} ({} | {} | {})", root.get_name().unwrap(), root.get_localized_control_type().unwrap(), root.get_classname().unwrap(), root.get_framework_id().unwrap(), runtime_id);
     let ui_elem_props = SaveUIElement::new(root.clone(), 0, 999);
     let mut tree = UITreeMap::new(item, runtime_id.clone(), ui_elem_props.clone());
-    let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, 0);    
+    let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, 0);
     // let mut ui_elements: Vec<UIElementInTree> = vec![ui_elem_in_tree];
     ui_elements.push(ui_elem_in_tree);
     xml_writer.set_root(XMLDomNode::new(root.get_control_type().unwrap().as_str()));
@@ -315,6 +351,9 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
     xml_root.set_attribute("RtID", runtime_id.as_str());
     xml_root.set_attribute("z-order", 999.to_string().as_str());
     xml_root.set_attribute("Name", root.get_name().unwrap_or("No name defined".to_string()).as_str());
+    
+    let mut tree_path = String::new();
+    let tree_path = &mut tree_path;
     let control_type = root.get_control_type();
     match control_type {
         Ok(ct) => {
@@ -327,7 +366,7 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
 
     if let Ok(_first_child) = walker.get_first_child(&root) {     
         // itarate over all child ui elements
-        get_element(&mut tree, &mut ui_elements,  0, &walker, &root, xml_root, 0, 0, max_depth, calling_window_caption);
+        get_element(&mut tree, &mut ui_elements,  0, &walker, &root, xml_root, 0, 0, max_depth, calling_window_caption, target_window_caption, tree_path);
     }
 
     // creating the XML DOM tree
@@ -356,7 +395,7 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
 
 
 
-pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, calling_window_caption: Option<String>) {   
+pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, calling_window_caption: Option<String>, target_window_caption: Option<String>) {   
     
     let automation = UIAutomation::new().unwrap();
     // control view walker
@@ -389,12 +428,16 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
             xml_root.set_attribute("ControlType", "No control type defined");
         }
     }   
+    
+    let mut tree_path = String::new();
+    let tree_path = &mut tree_path;
 
     if let Ok(_first_child) = walker.get_first_child(&root) {     
         // itarate over all child ui elements
         let calling_window_caption_1 = calling_window_caption.clone();
+        let target_window_caption_1 = target_window_caption.clone();
         // FIXME: the z-order ist not correct in the parallel version, needs analysis and fixing
-        get_element(&mut tree, &mut ui_elements,  0, &walker, &root, xml_root, 0, 0, Some(1 as usize), calling_window_caption_1);
+        get_element(&mut tree, &mut ui_elements,  0, &walker, &root, xml_root, 0, 0, Some(1 as usize), calling_window_caption_1, target_window_caption_1, tree_path);
         // get_element(&mut tree, &mut ui_elements,  0, &walker, &_first_child, xml_root, 0, 0, Some(2 as usize), calling_window_caption_1);
     }
 
@@ -453,10 +496,11 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
         // Spawn a new thread for each element to process it in parallel
         let tx_par_clone = tx_par.clone();
          let calling_window_caption_n = calling_window_caption.clone();
+         let target_window_caption_n = target_window_caption.clone();
          debug!("Spawning thread to process element: '{}'", element.get_name());
         let handle = std::thread::spawn(move || {
             // get_all_elements_par_xml(tx, None, None);
-            get_all_elements_xml(tx_par_clone, Some(element), max_depth, calling_window_caption_n);
+            get_all_elements_xml(tx_par_clone, Some(element), max_depth, calling_window_caption_n, target_window_caption_n);
         });
         handles.push(handle);
     }
@@ -500,7 +544,20 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
 }
 
 
-fn get_element(mut tree: &mut UITreeMap<SaveUIElement>, mut ui_elements: &mut Vec<UIElementInTree>, parent: usize, walker: &UITreeWalker, element: &UIElement, xml_dom_node: &mut XMLDomNode, level: usize, mut z_order: usize, max_depth: Option<usize>, calling_window_caption: Option<String>)  {
+fn get_element(
+    mut tree: &mut UITreeMap<SaveUIElement>, 
+    mut ui_elements: &mut Vec<UIElementInTree>, 
+    parent: usize, 
+    walker: &UITreeWalker, 
+    element: &UIElement, 
+    xml_dom_node: &mut XMLDomNode, 
+    level: usize, 
+    mut z_order: usize, 
+    max_depth: Option<usize>, 
+    calling_window_caption: Option<String>, 
+    target_window_caption: Option<String>,
+    mut tree_path: &mut String,)  {
+
     if let Some(limit) = max_depth {
         if level > limit {
             return;
@@ -515,6 +572,20 @@ fn get_element(mut tree: &mut UITreeMap<SaveUIElement>, mut ui_elements: &mut Ve
             }
         }
     }
+    // check for target window caption in the tree path if level is not zero
+    if level > 0 {
+        let name = element.get_name().unwrap_or("Unnamed".to_string());
+        let mut tree_path_new = format!("{}\\{}", tree_path, name);
+        let tree_path = &mut tree_path_new;        
+        trace!("Current tree path: {}", tree_path);
+        if let Some(target_caption) = &target_window_caption {
+        if !tree_path.contains(target_caption) {
+                trace!("Skipping element with caption: {} in tree path {}, looking for target caption: {}", name, tree_path, target_caption);
+                return;
+                }
+            }
+        }
+    
 
     let runtime_id = element.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]).iter().map(|x| x.to_string()).collect::<Vec<String>>().join("-");
     let item = format!("'{}' {} ({} | {} | {})", element.get_name().unwrap_or_default(), element.get_localized_control_type().unwrap_or_default(), element.get_classname().unwrap_or_default(), element.get_framework_id().unwrap_or_default(), runtime_id);
@@ -555,7 +626,7 @@ fn get_element(mut tree: &mut UITreeMap<SaveUIElement>, mut ui_elements: &mut Ve
     if let Ok(child) = walker.get_first_child(&element) {
         // getting child elements
         trace!("Found child element: {}", child.get_name().unwrap_or("Unknown".to_string()));
-        get_element(&mut tree, &mut ui_elements, parent, walker, &child, curr_xml_dom_node, level + 1, z_order, max_depth, calling_window_caption.clone());
+        get_element(&mut tree, &mut ui_elements, parent, walker, &child, curr_xml_dom_node, level + 1, z_order, max_depth, calling_window_caption.clone(), target_window_caption.clone(), &mut tree_path);
         let mut next = child;
         // walking siblings
         while let Ok(sibling) = walker.get_next_sibling(&next) {
@@ -564,7 +635,7 @@ fn get_element(mut tree: &mut UITreeMap<SaveUIElement>, mut ui_elements: &mut Ve
                 z_order += 1;
             }
             trace!("Found sibling element: {}", sibling.get_name().unwrap_or("Unknown".to_string()));
-            get_element(&mut tree, &mut ui_elements, parent, walker, &sibling, curr_xml_dom_node,  level + 1, z_order, max_depth, calling_window_caption.clone());
+            get_element(&mut tree, &mut ui_elements, parent, walker, &sibling, curr_xml_dom_node,  level + 1, z_order, max_depth, calling_window_caption.clone(), target_window_caption.clone(), &mut tree_path);
             next = sibling;
         }
     }    

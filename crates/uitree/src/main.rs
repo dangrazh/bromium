@@ -90,7 +90,7 @@ fn main() {
     printfmt!("Spawning separate thread to get ui tree in XML format");
     let start_xml = Instant::now();
     thread::spawn(move || {
-        get_all_elements_xml(tx_xml, None, None, None);
+        get_all_elements_xml(tx_xml, None, None, None, None);
     });
     printfmt!("Spawned separate thread to get ui tree in XML format");
     let ui_tree_xml: UITreeXML = rx_xml.recv().unwrap();
@@ -108,7 +108,7 @@ fn main() {
     printfmt!("Spawning separate thread to get ui tree in XML format");
     let start_par_xml = Instant::now();
     thread::spawn(move || {
-        get_all_elements_par_xml(tx_par_xml, None, None);
+        get_all_elements_par_xml(tx_par_xml, None, None, None);
     });
     printfmt!("Spawned separate thread to parallel get ui tree in XML format");
     let ui_tree_par_xml: UITreeXML = rx_par_xml.recv().unwrap();

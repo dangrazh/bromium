@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 
- use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use uitree::SaveUIElementXML;
 
 
@@ -89,7 +89,7 @@ pub fn launch_or_activate_application<>(app_path: &str, xpath: &str) -> Result<S
                                         success = true;
                                         let element_out = element.clone();
                                         info!("Running a full refresh o f the UI tree after activation");
-                                        win_driver.refresh_ui_tree().map_err(|e| format!("Failed to refresh UI tree: {:?}", e))?;
+                                        win_driver.refresh_ui_tree(None).map_err(|e| format!("Failed to refresh UI tree: {:?}", e))?;
                                         result = Ok(element_out);
                                     },
                                     None => {

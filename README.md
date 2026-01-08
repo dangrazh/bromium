@@ -110,8 +110,8 @@ if __name__ == "__main__":
 A class providing access to static methods to initialize and control the logging system of bromium and allowing to obtain new WinDriver instances (simply wrapping a call to the constructor of the WinDriver Class).
 
 ### Static Methods
-- `get_version -> str`: Returns the current version of the bromium module.
-- `get_win_driver -> WinDriver`: Return a new WinDriver object.
+- `get_version() -> str`: Returns the current version of the bromium module.
+- `get_win_driver(timeout_ms: int, window_title: Optional[str]) -> WinDriver`: Return a new WinDriver object.
 - `init_logging(log_path: Optional[str], log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]], enable_console: Optional[bool], enable_file: Optional[bool]) -> None`: Initializes logging with the given parameters.
 - `get_log_file() -> str:` Returns the current log file path. Returns default path if not set.
 - `set_log_file(path: str) -> None:` Sets the full path for the log file. Creates parent directories if needed.
@@ -128,7 +128,7 @@ The main class for interacting with the Windows UI tree.
 
 #### Constructor
 
-- `__init__(timeout_ms: int) -> None`: Initializes the WinDriver instance with a timeout in milliseconds.
+- `__init__(timeout_ms: int, window_title: Optional[str]) -> None`: Initializes the WinDriver instance with a timeout in milliseconds.
 
 #### Methods
 

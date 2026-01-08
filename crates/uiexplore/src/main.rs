@@ -31,7 +31,7 @@ fn main() -> eframe::Result {
     // get the ui tree in a separate thread
     let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
     thread::spawn(|| {
-        get_all_elements_xml(tx, None, None, Some(app_name.to_string()));
+        get_all_elements_xml(tx, None, None, Some(app_name.to_string()), None);
     });
     printfmt!("Spawned separate thread to get ui tree");
 
