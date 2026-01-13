@@ -56,7 +56,7 @@ impl log::Log for BromiumLogger {
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
             let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-            let log_message = format!("{}: - {} - {} [{} - Line {}]", timestamp, record.level(), record.args(), record.module_path().unwrap_or("soure module unknown"), record.line().unwrap_or(0));
+            let log_message = format!("{} | {}\t| {} | [{}, Line {}]", timestamp, record.level(), record.args(), record.module_path().unwrap_or("soure module unknown"), record.line().unwrap_or(0));
             
             // Log to console if enabled
             if *LOG_TO_CONSOLE.lock().unwrap() {

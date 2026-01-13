@@ -17,7 +17,7 @@ pub use uiexplore_xml::{UITree as UITreeXML, UIElementInTree as UIElementInTreeX
 mod uiexplore_iter;
 pub use uiexplore_iter::{SaveUIElement as SaveUIElementIter, UITree as UITreeIter, UIElementInTree as UIElementInTreeIter, get_all_elements_iterative};
 
-mod conversion;
+pub mod conversion;
 pub use conversion::{ConvertFromControlType, ConvertToControlType};
 
 mod commons;

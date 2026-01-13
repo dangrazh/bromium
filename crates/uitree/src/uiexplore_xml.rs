@@ -102,8 +102,33 @@ impl UITree {
     }
 
     pub fn node(&self, index: usize) -> (&str, &SaveUIElement) {
-        let node = &self.tree.node(index);
+        let node = self.tree.node(index);
         (&node.name, &node.data)
+
+    }
+
+    pub fn pretty_print_tree(&self) {
+        let mut visited = HashSet::new();
+        self.debug_tree(self.root(), 0, &mut visited);
+    }
+
+    fn debug_tree(&self, index: usize, indent: usize, visited: &mut HashSet<usize>) {
+
+        if visited.contains(&index) {
+            println!("{}(Cycle detected at node {})", " ".repeat(indent), index);
+            return;
+        }
+        visited.insert(index);
+
+        let node = &self.tree.nodes()[index];
+        let prefix = " ".repeat(indent);
+        println!("{}{}: {}", prefix, &node.name, node.data);
+
+        for &child in &node.children {
+            self.debug_tree(child, indent + 2, visited);
+        }
+
+
 
     }
     
@@ -320,7 +345,7 @@ fn find_node_by_rt_id(xot: &mut xot::Xot, doc: xot::Node, target: &String) -> Op
 }
 
 pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIElement>, max_depth: Option<usize>, calling_window_caption: Option<String>, target_window_caption: Option<String>) {   
-    
+    info!("Starting UI element retrieval with max depth: {:?} and window title filters: calling_window_caption='{}', target_window_caption='{}'", max_depth, calling_window_caption.clone().unwrap_or("none".to_string()), target_window_caption.clone().unwrap_or("none".to_string()));
     let automation = get_ui_automation_instance().unwrap();
     // control view walker
     let walker = automation.get_control_view_walker().unwrap();
@@ -340,7 +365,7 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
     // let level = if let Some(elem) = root_element {elem.get_level()} else {0};
 
     let runtime_id = root.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]).iter().map(|x| x.to_string()).collect::<Vec<String>>().join("-");
-    let item = format!("'{}' {} ({} | {} | {})", root.get_name().unwrap(), root.get_localized_control_type().unwrap(), root.get_classname().unwrap(), root.get_framework_id().unwrap(), runtime_id);
+    let item = format!("'{}' {} ({} | {} | {})", root.get_name().unwrap(), root.get_control_type().unwrap(), root.get_classname().unwrap(), root.get_framework_id().unwrap(), runtime_id);
     let ui_elem_props = SaveUIElement::new(root.clone(), 0, 999);
     let mut tree = UITreeMap::new(item, runtime_id.clone(), ui_elem_props.clone());
     let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, 0);
@@ -352,8 +377,8 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
     xml_root.set_attribute("z-order", 999.to_string().as_str());
     xml_root.set_attribute("Name", root.get_name().unwrap_or("No name defined".to_string()).as_str());
     
-    let mut tree_path = String::new();
-    let tree_path = &mut tree_path;
+    let tree_path = root.get_name().unwrap_or("No name defined".to_string());
+    // let tree_path = &mut tree_path;
     let control_type = root.get_control_type();
     match control_type {
         Ok(ct) => {
@@ -396,7 +421,7 @@ pub fn get_all_elements_xml(tx: Sender<UITree>, root_element: Option<SaveUIEleme
 
 
 pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, calling_window_caption: Option<String>, target_window_caption: Option<String>) {   
-    
+        info!("Starting parallel UI element retrieval with max depth: {:?} and window title filters: calling_window_caption='{}', target_window_caption='{}'", max_depth, calling_window_caption.clone().unwrap_or("none".to_string()), target_window_caption.clone().unwrap_or("none".to_string()));
     let automation = UIAutomation::new().unwrap();
     // control view walker
     let walker = automation.get_control_view_walker().unwrap();
@@ -429,15 +454,15 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
         }
     }   
     
-    let mut tree_path = String::new();
-    let tree_path = &mut tree_path;
+    let tree_path = String::new();
+    // let tree_path = &mut tree_path;
 
     if let Ok(_first_child) = walker.get_first_child(&root) {     
         // itarate over all child ui elements
         let calling_window_caption_1 = calling_window_caption.clone();
         let target_window_caption_1 = target_window_caption.clone();
         // FIXME: the z-order ist not correct in the parallel version, needs analysis and fixing
-        get_element(&mut tree, &mut ui_elements,  0, &walker, &root, xml_root, 0, 0, Some(1 as usize), calling_window_caption_1, target_window_caption_1, tree_path);
+        get_element(&mut tree, &mut ui_elements,  0, &walker, &root, xml_root, 0, 0, Some(1 as usize), calling_window_caption_1, target_window_caption_1, tree_path.clone());
         // get_element(&mut tree, &mut ui_elements,  0, &walker, &_first_child, xml_root, 0, 0, Some(2 as usize), calling_window_caption_1);
     }
 
@@ -530,10 +555,6 @@ pub fn get_all_elements_par_xml(tx: Sender<UITree>, max_depth: Option<usize>, ca
         debug!("UI tree has now {} elements", ui_tree.get_elements().len());
     }
     
-    // TODO: merging the xml_dom_tree strings into a single xml_dom_tree string
-    // using xot create to merge the xml trees
-
-
     // send the tree containing all UI elements back to the main thread
     info!("Sending UI tree with {} elements to the main thread...", ui_tree.get_elements().len());
     match tx.send(ui_tree) {
@@ -556,13 +577,20 @@ fn get_element(
     max_depth: Option<usize>, 
     calling_window_caption: Option<String>, 
     target_window_caption: Option<String>,
-    mut tree_path: &mut String,)  {
+    mut tree_path: String,)  {
 
+    
     if let Some(limit) = max_depth {
         if level > limit {
             return;
         }    
     }
+
+    let element_count = ui_elements.len();
+    if element_count % 100 == 0 {
+        info!("Processed {} UI elements so far...", element_count);    
+    }
+
 
     if let Some(caption) = &calling_window_caption {
         if let Ok(name) = element.get_name() {
@@ -574,17 +602,27 @@ fn get_element(
     }
     // check for target window caption in the tree path if level is not zero
     if level > 0 {
-        let name = element.get_name().unwrap_or("Unnamed".to_string());
-        let mut tree_path_new = format!("{}\\{}", tree_path, name);
-        let tree_path = &mut tree_path_new;        
+        let name = if element.get_name().unwrap_or("Unnamed".to_string()).is_empty() {
+            "Unnamed".to_string()
+        } else {
+            element.get_name().unwrap_or("Unnamed".to_string())
+        };
+
+        // let mut tree_path_new = format!("{}\\{}", tree_path, name);
+        // let tree_path = &mut tree_path_new;     
+        if tree_path.is_empty() {
+            tree_path = name.clone();
+        } else {
+            tree_path = format!("{}\\{}", tree_path, name);
+        }   
         trace!("Current tree path: {}", tree_path);
         if let Some(target_caption) = &target_window_caption {
-        if !tree_path.contains(target_caption) {
-                trace!("Skipping element with caption: {} in tree path {}, looking for target caption: {}", name, tree_path, target_caption);
-                return;
-                }
+            if !tree_path.contains(target_caption) {
+                    trace!("Skipping element with caption: {} in tree path {}, looking for target caption: {}", name, tree_path, target_caption);
+                    return;
             }
         }
+    }
     
 
     let runtime_id = element.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]).iter().map(|x| x.to_string()).collect::<Vec<String>>().join("-");
@@ -626,7 +664,7 @@ fn get_element(
     if let Ok(child) = walker.get_first_child(&element) {
         // getting child elements
         trace!("Found child element: {}", child.get_name().unwrap_or("Unknown".to_string()));
-        get_element(&mut tree, &mut ui_elements, parent, walker, &child, curr_xml_dom_node, level + 1, z_order, max_depth, calling_window_caption.clone(), target_window_caption.clone(), &mut tree_path);
+        get_element(&mut tree, &mut ui_elements, parent, walker, &child, curr_xml_dom_node, level + 1, z_order, max_depth, calling_window_caption.clone(), target_window_caption.clone(), tree_path.clone());
         let mut next = child;
         // walking siblings
         while let Ok(sibling) = walker.get_next_sibling(&next) {
@@ -635,7 +673,7 @@ fn get_element(
                 z_order += 1;
             }
             trace!("Found sibling element: {}", sibling.get_name().unwrap_or("Unknown".to_string()));
-            get_element(&mut tree, &mut ui_elements, parent, walker, &sibling, curr_xml_dom_node,  level + 1, z_order, max_depth, calling_window_caption.clone(), target_window_caption.clone(), &mut tree_path);
+            get_element(&mut tree, &mut ui_elements, parent, walker, &sibling, curr_xml_dom_node,  level + 1, z_order, max_depth, calling_window_caption.clone(), target_window_caption.clone(), tree_path.clone());
             next = sibling;
         }
     }    

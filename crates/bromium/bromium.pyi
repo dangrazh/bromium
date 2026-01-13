@@ -217,6 +217,16 @@ class Element:
         """
         pass
 
+    def get_control_type(self) -> str:
+        """
+        Returns the control type of the UI element.
+
+        Returns:
+        - str: The control type of the UI element.       
+        """
+        pass
+
+
     def get_runtime_id(self) -> list[int]:
         """
         Returns the runtime ID of the UI element.
@@ -369,7 +379,7 @@ class WinDriver:
         """
         pass
 
-    def reload() -> WinDriver:
+    def reload(self) -> WinDriver:
         """
         Reloads the WinDriver instance to refresh its internal state.
         
@@ -436,7 +446,7 @@ class WinDriver:
         """
         pass
 
-    def get_element_by_xpath(self, xpath: str) -> 'Element':
+    def get_element_by_xpath(self, xpath: str, timeout_ms: Optional[int]) -> 'Element':
         """
         Returns the Windows UI Automation API UI element of the window at the given xpath. As an xpath
         is a string representation of the UI element, it is not a valid xpath in the XML sense.
@@ -466,6 +476,12 @@ class WinDriver:
         
         Returns:
         - list[Element]: A list of Windows UI Automation API UI elements matching the given xpath.
+        """
+        pass
+
+    def pretty_print_ui_tree(self) -> None:
+        """
+        Pretty prints the current UI tree to the console for debugging purposes.
         """
         pass
 

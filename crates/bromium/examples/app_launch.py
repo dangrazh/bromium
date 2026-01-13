@@ -7,11 +7,11 @@ def demo_app_launch():
     
     #initialize Bromium logging
     print("Initializing Bromium logging...")
-    Bromium.init_logging(log_path=None, log_level=None, enable_console=True, enable_file=True)
+    Bromium.init_logging(log_path=None, log_level="Info", enable_console=True, enable_file=True)
     
     # Create a WinDriver instance
     print("Getting WinDriver Instance...")
-    driver = WinDriver(timeout_ms=5)
+    driver = WinDriver(timeout_ms=5, window_title=None)
     print("WinDriver instance obtained.")
     no_of_elements = driver.get_no_of_ui_elements()
     print(f"Driver has {no_of_elements} elements.")
@@ -44,30 +44,39 @@ def demo_app_launch():
         no_of_elements = driver.get_no_of_ui_elements()
         print(f"Driver reloaded to refresh UI tree. It now has {no_of_elements} elements.")
  
+        # Increase logging level to Trace for detailed output
+        # print("Setting Bromium log level to Trace for detailed output...")
+        # Bromium.set_log_level("Trace")
+
         # Teams login - if required
         xpath_login_button = r"//Button[@Name='Sign in']"
         try:
-            login_button = driver.get_element_by_xpath(xpath_login_button)
+            login_button = driver.get_element_by_xpath(xpath_login_button, None)
             # if this does not raise an exception, the button was found, hence we need to login
             print("Login button found, performing login...")
             login_button.send_click()
             print("Clicked the login button.")
             # give it some time to process
             time.sleep(2)
-            driver.refresh_ui_tree()
+            driver.refresh(None)
             xpath_username = r"//Edit[@Name='E-Mail-Adresse, Telefonnummer oder Skype-Name']"
             try:
-                username_field = driver.get_element_by_xpath(xpath_username)
+                username_field = driver.get_element_by_xpath(xpath_username, None)
                 username_field.send_keys("john.doe@gmail.com")
             except Exception as e:
-                print("Username field not found, aborting login.")
-
-
+                print(f"Username field not found, aborting login. got error: {e}")
         except Exception as e:
-            print("Login button not found, assuming already logged in.")
+            print(f"Login button not found, assuming already logged in. got error: {e}")
     except Exception as e:
         print(f"Error during launch/activation of {file_name}: {e}")        
     
+    print("Part 1 of test completed!")
+
+    print("Getting a new WinDriver instance to check if the MS Teams is running...")
+    driver1 = WinDriver(timeout_ms=5, window_title="Microsoft Teams")
+    no_of_elements = driver1.get_no_of_ui_elements()
+    print(f"New Driver instance has {no_of_elements} elements.")
+
     print("Test completed!")
 
 if __name__ == "__main__":

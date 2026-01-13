@@ -115,6 +115,25 @@ impl SaveUIElement {
 
 }
 
+impl std::fmt::Display for SaveUIElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SaveUIElement {{ name: {}, classname: {}, control_type: {}, localized_control_type: {}, framework_id: {}, runtime_id: {:?}, automation_id: {}, handle: {}, bounding_rect: {:?}, bounding_rect_size: {}, level: {}, z_order: {}, xpath: {:?} }}",
+            self.name,
+            self.classname,
+            self.control_type,
+            self.localized_control_type,
+            self.framework_id,
+            self.runtime_id,
+            self.automation_id,
+            self.handle,
+            self.bounding_rect,
+            self.bounding_rect_size,
+            self.level,
+            self.z_order,
+            self.xpath,
+        )
+    }
+}
 
 impl Default for SaveUIElement {
     fn default() -> Self {

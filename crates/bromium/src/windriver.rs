@@ -10,6 +10,8 @@ use pyo3::prelude::*;
 use crate::sreen_context::ScreenContext;
 use crate::uiauto::{get_ui_element_by_runtimeid, supports_invoke, supports_select, invoke_click, select_item}; // get_ui_element_by_xpath, get_element_by_xpath
 use uitree::{SaveUIElementXML, UITreeXML, get_all_elements_xml};
+use uitree::conversion::ConvertFromControlType;
+
 // use crate::uiexplore::UITree;
 use crate::app_control::launch_or_activate_application;
 
@@ -122,6 +124,7 @@ pub struct Element {
     name: String,
     xpath: String,
     handle: isize,
+    control_type: String,
     runtime_id: Vec<i32>,
     bounding_rectangle: RECT,
 
@@ -132,16 +135,16 @@ pub struct Element {
 impl Element {
 
     #[new]
-    pub fn new(name: String, xpath: String, handle: isize, runtime_id: Vec<i32>, bounding_rectangle: (i32, i32, i32, i32)) -> Self {
+    pub fn new(name: String, xpath: String, handle: isize, control_type: String, runtime_id: Vec<i32>, bounding_rectangle: (i32, i32, i32, i32)) -> Self {
         
-        debug!("Creating new Element: name='{}', xpath='{}', handle={}", name, xpath, handle);
+        debug!("Creating new Element: name='{}', xpath='{}', handle={}, control_type='{}'", name, xpath, handle, control_type);
         let bounding_rectangle  = RECT {
             left: bounding_rectangle.0,
             top: bounding_rectangle.1,
             right: bounding_rectangle.2,
             bottom: bounding_rectangle.3,
         };
-        Element { name, xpath, handle, runtime_id , bounding_rectangle}
+        Element { name, xpath, handle, control_type, runtime_id , bounding_rectangle}
     }
 
     pub fn __repr__(&self) -> PyResult<String> {
@@ -164,6 +167,10 @@ impl Element {
         self.handle
     }
 
+    pub fn get_control_type(&self) -> PyResult<String> {
+        PyResult::Ok(self.control_type.clone())
+    }
+
     pub fn get_runtime_id(&self) -> Vec<i32> {
         self.runtime_id.clone()
     }
@@ -177,7 +184,7 @@ impl Element {
                 debug!("Element supports Invoke pattern, using invoke_click.");
                 match invoke_click(raw_element) {
                     Ok(_) => {
-                        info!("Successfully invoked click on element: {:#?}", e);
+                        info!("Successfully invoked click on element: {}", e.get_name().unwrap_or("Name not set".to_string()));
                     }
                     Err(e) => {
                         error!("Error invoking click on element: {:?}", e);
@@ -188,7 +195,7 @@ impl Element {
                 debug!("Element supports Select pattern, using select_item.");
                 match select_item(raw_element) {
                     Ok(_) => {
-                        info!("Successfully selected item on element: {:#?}", e);
+                        info!("Successfully selected item on element: {}", e.get_name().unwrap_or("Name not set".to_string()));
                     }
                     Err(e) => {
                         error!("Error selecting item on element: {:?}", e);
@@ -200,7 +207,7 @@ impl Element {
                 debug!("Element does not support Invoke or Select pattern, using standard click as fallback.");
                  match e.click() {
                     Ok(_) => {
-                        info!("Successfully clicked on element: {:#?}", e);
+                        info!("Successfully clicked on element: {}", e.get_name().unwrap_or("Name not set".to_string()));
                     }
                     Err(e) => {
                         error!("Error clicking on element: {:?}", e);
@@ -370,10 +377,21 @@ impl From<&UIElement> for Element {
         }
 
         let native_handle: isize = ui_element.get_native_window_handle().unwrap_or_default().into();
+        
+        let control_type: String = match ui_element.get_control_type() {
+            Ok(ct) => {
+                ct.as_str().to_string()
+            },
+            Err(_) => {
+                "Control Type undefined".to_string()
+            }
+        };
+        
         Element {
             name: ui_element.get_name().unwrap_or("".to_string()),
             xpath: String::new(), // XPath is not available here
             handle: native_handle,
+            control_type: control_type,
             runtime_id: ui_element.get_runtime_id().unwrap_or(vec![0,0,0,0]),
             bounding_rectangle: RECT {
                 left: bounding_rect.left,            
@@ -403,11 +421,22 @@ impl From<&SaveUIElementXML> for Element {
             }
         }
 
+        let control_type: String = match props.get_control_type() {
+            Ok(ct) => {
+                ct.as_str().to_string()
+            },
+            Err(_) => {
+                "Control Type undefined".to_string()
+            }
+        };
+
+
         let native_handle: isize = props.get_native_window_handle().unwrap_or_default().into();
         Element {
             name: props.get_name().unwrap_or("".to_string()),
             xpath: String::new(), // XPath is not available here
             handle: native_handle,
+            control_type: control_type,
             runtime_id: props.get_runtime_id().unwrap_or(vec![0,0,0,0]),
             bounding_rectangle: RECT {
                 left: bounding_rect.left,            
@@ -430,6 +459,7 @@ impl Default for Element {
             name: String::new(),
             xpath: String::new(),
             handle: 0,
+            control_type: String::new(),
             runtime_id: vec![],
             bounding_rectangle: RECT {
                 left: 0,
@@ -490,7 +520,12 @@ impl WinDriver {
         // };
         // let logger_instance =InstanceLogger::init_logger(log_dir, log_level_parsed, enable_console, enable_file);
 
-        debug!("Creating new WinDriver with timeout: {}ms", timeout_ms);
+        if let Some(title) = window_title.clone() {
+            debug!("Creating new WinDriver with timeout: {}ms and window title filter: '{}'", timeout_ms, title);
+        } else {
+            debug!("Creating new WinDriver with timeout: {}ms", timeout_ms);
+        }
+        
 
         // get the ui tree in a separate thread
         let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
@@ -501,7 +536,19 @@ impl WinDriver {
         });
         info!("Spawned separate thread to get ui tree");
         
-        let ui_tree: UITreeXML = rx.recv().unwrap();
+        let ui_tree: UITreeXML;
+        match rx.recv() {
+            Ok(ui_tr) => {   
+            debug!("UI tree successfully received from thread");
+            ui_tree = ui_tr;
+            // continue
+            },
+            Err(e) => {
+                error!("Failed to get UI tree from thread. Error occurred: {}", e);
+                let error_msg = format!("Failed to get UI tree from thread. Error occurred: {}", e);
+                return PyResult::Err(pyo3::exceptions::PyValueError::new_err(error_msg));
+            }
+        }
         let items_in_ui_tree = ui_tree.get_elements().len();
         debug!("UI tree received with {} elements", items_in_ui_tree);
         
@@ -576,10 +623,13 @@ impl WinDriver {
             let ui_element_props = ui_element_in_tree.get_element_props();
             let ui_element_props = ui_element_props.get_element();
             let bounding_rect = ui_element_props.get_bounding_rectangle();
+            let control_type = ui_element_props.get_control_type();
+
             let element = Element::new(
                 ui_element_props.get_name().clone(),
                 xpath,
                 ui_element_props.get_handle(),
+                control_type.clone(),
                 ui_element_props.get_runtime_id().clone(),
                 (bounding_rect.get_left(), bounding_rect.get_top(), bounding_rect.get_right(), bounding_rect.get_bottom())
             );
@@ -592,7 +642,7 @@ impl WinDriver {
 
     }
 
-    fn get_element_by_xpath(&mut self, xpath: String, timeout_ms: Option<u32>) -> PyResult<Element> {
+    pub fn get_element_by_xpath(&mut self, xpath: String, timeout_ms: Option<u32>) -> PyResult<Element> {
         debug!("WinDriver::get_ui_element_by_xpath called.");
         
         // let ui_elem = get_element_by_xpath(xpath.clone(), &self.ui_tree);
@@ -618,13 +668,18 @@ impl WinDriver {
                         let name = element.get_name().clone();
                         let xpath = xpath.clone();
                         let handle = element.get_handle();
+                        let control_type = element.get_control_type();
                         let runtime_id = element.get_runtime_id().clone();
                         let bounding_rectangle = element.get_bounding_rectangle();
-                        return PyResult::Ok(Element::new(name, xpath, handle, runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom())));
+                        return PyResult::Ok(Element::new(name, xpath, handle, control_type.clone(), runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom())));
                     }
                 }
                 debug!("Element not found after retrying for {} ms.", timeout);
                 return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Element not found after retries"));
+            } else {
+                debug!("Element not found, no timeout set, returning error without retrying");
+                return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Element not found"));
+
             }
         }
         
@@ -633,12 +688,13 @@ impl WinDriver {
         let name = element.get_name().clone();
         let xpath = xpath.clone();
         let handle = element.get_handle();
+        let control_type = element.get_control_type();
         let runtime_id = element.get_runtime_id().clone();
         let bounding_rectangle = element.get_bounding_rectangle();
-        PyResult::Ok(Element::new(name, xpath, handle, runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom())))
+        PyResult::Ok(Element::new(name, xpath, handle, control_type.clone(), runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom())))
     }
 
-    fn get_elements_by_xpath(&self, xpath: String) -> PyResult<Vec<Element>> {
+    pub fn get_elements_by_xpath(&self, xpath: String) -> PyResult<Vec<Element>> {
         debug!("WinDriver::get_ui_element_by_xpath called.");
         
         // let ui_elem = get_element_by_xpath(xpath.clone(), &self.ui_tree);
@@ -658,12 +714,19 @@ impl WinDriver {
             let name = element.get_name().clone();
             let xpath = xpath.clone();
             let handle = element.get_handle();
+            let control_type = element.get_control_type();
             let runtime_id = element.get_runtime_id().clone();
             let bounding_rectangle = element.get_bounding_rectangle();
-            let elem = Element::new(name, xpath, handle, runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom()));
+            let elem = Element::new(name, xpath, handle, control_type.clone(), runtime_id, (bounding_rectangle.get_left(), bounding_rectangle.get_top(), bounding_rectangle.get_right(), bounding_rectangle.get_bottom()));
             results.push(elem);
         }
         PyResult::Ok(results)
+    }
+
+    pub fn pretty_print_ui_tree(&self) -> PyResult<()> {
+        debug!("WinDriver::pretty_print_tree called.");
+        self.ui_tree.pretty_print_tree();
+        PyResult::Ok(())
     }
 
     pub fn get_screen_context(&self) -> PyResult<ScreenContext> {

@@ -217,7 +217,7 @@ impl<T> UITreeMap<T> {
         }
     }
 
-    pub fn debug_tree<F>(&self, index: usize, indent: usize, display: &F, visited: &mut UIHashSet<usize>)
+    pub fn debug_tree_map<F>(&self, index: usize, indent: usize, display: &F, visited: &mut UIHashSet<usize>)
     where
         F: Fn(&T) -> String,
     {
@@ -232,7 +232,7 @@ impl<T> UITreeMap<T> {
         println!("{}{}: {}", prefix, &node.name, display(&node.data));
 
         for &child in &node.children {
-            self.debug_tree(child, indent + 2, display, visited);
+            self.debug_tree_map(child, indent + 2, display, visited);
         }
     }
 
@@ -294,7 +294,7 @@ pub trait UITree {
 
     fn debug_tree(&self, display: impl Fn(&Self::Data) -> String) {
         let mut visited = UIHashSet::new();
-        self.tree().debug_tree(self.root(), 0, &display, &mut visited);
+        self.tree().debug_tree_map(self.root(), 0, &display, &mut visited);
     }
 
 }

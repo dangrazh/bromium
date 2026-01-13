@@ -783,6 +783,9 @@ impl UIExplorer {
                 
                 // Use the entered text and evaluate the expression
                 let expr = xpath_input.clone();
+                // Patch the xpath with /@RtID if it is missing
+                let expr = if !expr.ends_with("/@RtID") {expr + "/@RtID"} else {expr};
+
                 let srcxml = self.ui_tree.get_xml_dom_tree().to_owned(); // your XML source
                 let eval_result = xpath_eval::eval_xpath(expr, srcxml);
                 self.xpath_eval_result = Some(eval_result);

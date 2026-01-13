@@ -43,6 +43,9 @@ fn main() -> eframe::Result {
     signal_file::create_signal_file().unwrap();
     printfmt!("UI Tree retrieved, setting up UIExplorer app...");
 
+    // debugging only...
+    // ui_tree.pretty_print_tree();
+
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).    
 
     let app_size_pos = AppContext::new_from_screen(0.4, 0.8);

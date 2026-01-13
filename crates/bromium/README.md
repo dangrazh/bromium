@@ -155,6 +155,7 @@ Represents a Windows UI Automation element.
 - `name` (str): The name of the UI element.
 - `xpath` (str): The XPath locator for the UI element.
 - `handle` (int): The window handle of the UI element.
+- `control_type` (str):  The control type of the UI element.
 - `runtime_id` (list[int]): The runtime ID of the UI element.
 - `bounding_rectangle` (tuple[int, int, int, int]): The bounding rectangle coordinates (left, top, right, bottom).
 
@@ -163,6 +164,7 @@ Represents a Windows UI Automation element.
 - `get_name() -> str`: Returns the name of the UI element.
 - `get_xpath() -> str`: Returns the XPath locator of the UI element.
 - `get_handle() -> int`: Returns the window handle of the UI element.
+- `get_control_type() -> str`:  Returns the control type of the UI element.
 - `get_runtime_id() -> list[int]`: Returns the runtime ID of the UI element.
 - `send_click() -> None`: Sends a left mouse click to the element.
 - `send_double_click() -> None`: Sends a double click to the element.
