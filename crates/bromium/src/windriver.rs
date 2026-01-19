@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 
 // use crate::instance_logging::InstanceLogger;
 use crate::sreen_context::ScreenContext;
-use crate::uiauto::{get_ui_element_by_runtimeid, supports_invoke, supports_select, invoke_click, select_item}; // get_ui_element_by_xpath, get_element_by_xpath
+use crate::uiauto::{get_ui_element_by_runtimeid, invoke_click, select_item, set_value, supports_invoke, supports_select, supports_value}; // get_ui_element_by_xpath, get_element_by_xpath
 use uitree::{SaveUIElementXML, UITreeXML, get_all_elements_xml};
 use uitree::conversion::ConvertFromControlType;
 
@@ -309,15 +309,48 @@ impl Element {
     pub fn send_text(&self, text: String) -> PyResult<()> {
         debug!("Element::send_text called with text: '{}' for element: {}", text, self.name);
         if let Ok(e) = convert_to_ui_element(self) {
-            match e.send_text(&text, 20) { // 20 ms interval for sending text
-                Ok(_) => {
-                    info!("Sent text '{}' to element: {:#?}", text, e);
-                }
-                Err(e) => {
-                    error!("Error sending text to element: {:?}", e);
-                    return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Send text failed"));
+            let raw_element = e.as_ref();
+            if supports_value(raw_element) {
+                debug!("Element supports Value pattern, using set_value.");
+                match set_value(raw_element, text) {
+                    Ok(_) => {
+                        info!("Successfully set value on element: {}", e.get_name().unwrap_or("Name not set".to_string()));
+                    }
+                    Err(e) => {
+                        error!("Error setting value on element: {:?}", e);
+                        return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Invoke click failed"));
+                    }
                 }
             }
+            else {
+                debug!("Element does not support Value pattern, using send_text as fallback");
+                // check if the element has the focus and try setting it if no
+                let is_focusable: bool = if let Ok(focusable) = e.is_keyboard_focusable() {focusable} else {false};
+                let has_focus: bool = if let Ok(focus) = e.has_keyboard_focus() {focus} else {false};
+                if is_focusable && !has_focus {
+                    debug!("setting keyboard focus to elemen: {}", e.get_name().unwrap_or("Name not set".to_string()));
+                    match e.set_focus() {
+                        Ok(_) => {
+                            info!("Set focus to element: {}", e);
+                        },
+                        Err(err) => {
+                            error!("could not set keyboard focus on element: {} due to error: {}", e, err);
+                            return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Could not set keyboard focus to target element"));
+                        }
+                    };
+                }
+                
+                match e.send_text(&text, 20) { // 20 ms interval for sending text
+                    Ok(_) => {
+                        info!("Sent text '{}' to element: {:#?}", text, e);
+                    }
+                    Err(e) => {
+                        error!("Error sending text to element: {:?}", e);
+                        return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Send text failed"));
+                    }
+                }
+            }
+
         } else {
             return PyResult::Err(pyo3::exceptions::PyValueError::new_err("Element not found"));
         }

@@ -724,6 +724,7 @@ dependencies = [
  "uiautomation",
  "uitree",
  "windows 0.61.3",
+ "windows-strings 0.4.2",
  "xmlutil",
 ]
 

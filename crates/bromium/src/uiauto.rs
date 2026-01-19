@@ -1,3 +1,5 @@
+use windows_strings::*;
+
 use uiautomation::{UIAutomation, UIElement}; // controls::ControlType, 
 use log::{debug, error, info, warn}; // trace, 
 
@@ -74,8 +76,11 @@ use windows::{
         IUIAutomationElement,
         IUIAutomationInvokePattern,
         IUIAutomationSelectionItemPattern,
+        IUIAutomationValuePattern,
         UIA_InvokePatternId,
         UIA_SelectionItemPatternId,
+        UIA_ValuePatternId,
+
     },
 };
 
@@ -104,6 +109,17 @@ pub fn select_item(element: &IUIAutomationElement) -> windows::core::Result<()> 
     Ok(())
 }
 
+pub fn set_value(element: &IUIAutomationElement, text: String) -> windows::core::Result<()> {
+    unsafe {
+        let value: IUIAutomationValuePattern = element.GetCurrentPatternAs(UIA_ValuePatternId)?;
+    
+    // let text_wchar = text.encode_utf16().collect();
+    let text_bstr = BSTR::from(text);
+    value.SetValue(&text_bstr)?;
+    }
+    Ok(())
+}
+
 pub fn supports_invoke(element: &IUIAutomationElement) -> bool {
     unsafe {
         let check  = element.GetCurrentPattern(UIA_InvokePatternId).is_ok();
@@ -116,6 +132,14 @@ pub fn supports_select(element: &IUIAutomationElement) -> bool {
         let check = element.GetCurrentPattern(UIA_SelectionItemPatternId).is_ok();
         check
     }
+}
+
+pub fn supports_value(element: &IUIAutomationElement) -> bool {
+    unsafe {
+        let check = element.GetCurrentPattern(UIA_ValuePatternId).is_ok();
+        check
+    }
+
 }
 
 mod tests {
