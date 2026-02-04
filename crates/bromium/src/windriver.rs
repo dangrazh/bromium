@@ -51,6 +51,7 @@ impl Bromium {
             Some(level_str) => log::LevelFilter::from_str(level_str),
             None => log::LevelFilter::Info,
         };
+        dbg!(log_level_parsed);
         logging::init_logger(log_dir, log_level_parsed, enable_console, enable_file);
         info!("Bromium logging initialized.");
         PyResult::Ok(())
@@ -311,10 +312,10 @@ impl Element {
         if let Ok(e) = convert_to_ui_element(self) {
             let raw_element = e.as_ref();
             if supports_value(raw_element) {
-                debug!("Element supports Value pattern, using set_value.");
+                info!("Element supports Value pattern, using set_value.");
                 match set_value(raw_element, text) {
                     Ok(_) => {
-                        info!("Successfully set value on element: {}", e.get_name().unwrap_or("Name not set".to_string()));
+                        debug!("Successfully set value on element: {}", e.get_name().unwrap_or("Name not set".to_string()));
                     }
                     Err(e) => {
                         error!("Error setting value on element: {:?}", e);

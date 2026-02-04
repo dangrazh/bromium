@@ -526,7 +526,7 @@ class WinDriver:
         """
         pass
 
-    def refresh(self) -> None:
+    def refresh(self, window_title: Optional[str]) -> None:
         """
         Refreshes the internal UI tree representation.
         
