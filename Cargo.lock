@@ -715,17 +715,28 @@ dependencies = [
 name = "bromium"
 version = "0.6.4"
 dependencies = [
+ "bromium-common",
  "chrono",
  "display-info",
  "fs_extra",
  "log",
  "pyo3",
  "screen-capture",
+ "thiserror 2.0.12",
  "uiautomation",
  "uitree",
  "windows 0.61.3",
  "windows-strings 0.4.2",
- "xmlutil",
+]
+
+[[package]]
+name = "bromium-common"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "log",
+ "uiautomation",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -5158,6 +5169,7 @@ dependencies = [
 name = "uiexplore"
 version = "0.2.1"
 dependencies = [
+ "bromium-common",
  "chrono",
  "eframe",
  "egui",
@@ -5176,8 +5188,10 @@ dependencies = [
 name = "uitree"
 version = "0.1.0"
 dependencies = [
+ "bromium-common",
  "chrono",
  "log",
+ "thiserror 2.0.12",
  "uiautomation",
  "xmlutil",
  "xot 0.31.2",
@@ -6310,6 +6324,7 @@ checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 name = "winevent-monitor"
 version = "0.1.0"
 dependencies = [
+ "bromium-common",
  "chrono",
  "uiautomation",
  "win_event_hook",
@@ -6681,6 +6696,7 @@ dependencies = [
  "ariadne",
  "quick-xml 0.38.4",
  "roxmltree",
+ "thiserror 2.0.12",
  "xee-xpath",
  "xot 0.31.2",
 ]

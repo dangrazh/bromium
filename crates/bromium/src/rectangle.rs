@@ -1,29 +1,33 @@
 // use windows::Win32::Foundation::POINT;
 
 use windows::{
-    core::{Error, Result},
-    Win32::Foundation::{HWND, COLORREF, POINT, RECT},
-    Win32::Graphics::Gdi::{HOLLOW_BRUSH, PS_SOLID, Rectangle, CreatePen, GetStockObject, SelectObject, DeleteObject, GetDC,  ReleaseDC, InvalidateRect},
+    Win32::Foundation::{COLORREF, HWND, POINT, RECT},
+    Win32::Graphics::Gdi::{
+        CreatePen, DeleteObject, GetDC, GetStockObject, HOLLOW_BRUSH, InvalidateRect, PS_SOLID,
+        Rectangle, ReleaseDC, SelectObject,
+    },
     // Win32::UI::WindowsAndMessaging::*,
+    core::{Error, Result},
 };
 
 use uitree::UIElementInTreeXML;
 
-pub fn get_point_bounding_rect<'a>(point: &'a POINT, ui_elements: &'a Vec<UIElementInTreeXML>) -> Option<&'a UIElementInTreeXML> {
-    
+pub fn get_point_bounding_rect<'a>(
+    point: &'a POINT,
+    ui_elements: &'a Vec<UIElementInTreeXML>,
+) -> Option<&'a UIElementInTreeXML> {
     // let mut cntr = 0;
     for element in ui_elements {
         // cntr += 1;
         let bounding_rect = &element.get_element_props().get_bounding_rectangle();
         if is_inside_rectancle(bounding_rect, point.x, point.y) {
-            // println!("point: {{ x: {}, y: {} }} searched elements: {} / Found element: {{ name: '{}', control_type: '{}' bounding_rect: {} }}", point.x, point.y, cntr, element.name, element.control_type, element.bounding_rect);        
+            // println!("point: {{ x: {}, y: {} }} searched elements: {} / Found element: {{ name: '{}', control_type: '{}' bounding_rect: {} }}", point.x, point.y, cntr, element.name, element.control_type, element.bounding_rect);
             return Some(element);
         }
     }
     // printfmt!("NO ELEMENT FOUND! Searched elements: {}", cntr);
     None
 }
-
 
 pub fn is_inside_rectancle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> bool {
     x >= rect.get_left() && x <= rect.get_right() && y >= rect.get_top() && y <= rect.get_bottom()

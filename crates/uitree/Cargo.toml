@@ -8,13 +8,8 @@ uiautomation.workspace = true
 chrono.workspace = true
 log.workspace = true
 
-
+bromium-common = { path = "../bromium-common" }
 xmlutil = { path = "../xmlutil" }
 
-xot = "0.31.2"
-# quick-xml = "0.38.0"
-
-# [profile.release]
-# opt-level = 3
-# lto = true
-# debug = true
+xot.workspace = true
+thiserror = "2.0"

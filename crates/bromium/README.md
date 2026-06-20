@@ -42,7 +42,7 @@ def demo_app_launch():
 
     # Create a WinDriver instance
     print("Getting WinDriver Instance...")
-    driver = WinDriver(timeout_ms=5_000)
+    driver = WinDriver(timeout_ms=5_000, window_title=None)
     print("WinDriver instance obtained.")
     no_of_elements = driver.get_no_of_ui_elements()
     print(f"Driver has {no_of_elements} elements.")
@@ -78,17 +78,17 @@ def demo_app_launch():
         # Teams login - if required
         xpath_login_button = r"//Button[@Name='Sign in']"
         try:
-            login_button = driver.get_ui_element_by_xpath(xpath_login_button)
+            login_button = driver.get_element_by_xpath(xpath_login_button)
             # if this does not raise an exception, the button was found, hence we need to login
             print("Login button found, performing login...")
             login_button.send_click()
             print("Clicked the login button.")
             # give it some time to process
             time.sleep(2)
-            driver.refresh_ui_tree()
+            driver.refresh()
             xpath_username = r"//Edit[@Name='E-Mail-Adresse, Telefonnummer oder Skype-Name']"
             try:
-                username_field = driver.get_ui_element_by_xpath(xpath_username)
+                username_field = driver.get_element_by_xpath(xpath_username)
                 username_field.send_keys("john.doe@gmail.com")
             except Exception as e:
                 print("Username field not found, aborting login.")
@@ -136,14 +136,17 @@ The main class for interacting with the Windows UI tree.
 
 - `get_timeout() -> int`: Returns the current timeout value in milliseconds.
 - `set_timeout(timeout_ms: int) -> None`: Sets a new timeout value in milliseconds.
-- `get_curser_pos() -> tuple[int, int]`: Returns the current cursor position as a tuple of (x, y) coordinates.
-- `get_ui_element_by_coordinates(x: int, y: int) -> Element`: Returns the UI element at the given pixel coordinates.
-- `get_ui_element_by_xpath(xpath: str) -> Element`: Returns the UI element matching the given XPath. Uses a three-step search approach: exact match, subtree search with single match, and pattern matching across multiple matches.
+- `get_cursor_pos() -> tuple[int, int]`: Returns the current cursor position as a tuple of (x, y) coordinates.
+- `get_element_by_coordinates(x: int, y: int) -> Element`: Returns the UI element at the given pixel coordinates.
+- `get_element_by_xpath(xpath: str, timeout_ms: Optional[int]) -> Element`: Returns the UI element matching the given XPath. Uses a three-step search approach: exact match, subtree search with single match, and pattern matching across multiple matches. Optional timeout overrides the driver's default.
+- `get_elements_by_xpath(xpath: str) -> list[Element]`: Returns all UI elements matching the given XPath.
 - `get_screen_context() -> ScreenContext`: Returns screen size and scale information for all displays.
 - `get_no_of_ui_elements() -> int`: Returns the number of UI elements in the current UI tree.
+- `set_window_title(window_title: Optional[str]) -> None`: Sets a window title filter for subsequent operations.
 - `launch_or_activate_app(app_path: str, xpath: str) -> Element`: Launches a new application or activates an existing window. Returns the Element matching the provided XPath.
 - `take_screenshot() -> str`: Takes a screenshot of the current screen, saves it to a temporary directory, and returns the file path.
-- `refresh() -> None`: Refreshes the internal UI tree representation by scanning the current window state. Runs in a separate thread to avoid blocking.
+- `pretty_print_ui_tree() -> None`: Pretty prints the current UI tree to the console for debugging purposes.
+- `refresh(window_title: Optional[str]) -> None`: Refreshes the internal UI tree representation by scanning the current window state. Optionally filters by window title.
 - `reload() -> WinDriver`: Reloads the WinDriver instance to refresh its internal state and returns a new WinDriver instance.
 
 ### Element
@@ -244,7 +247,7 @@ To build the project from source, you'll need:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/bromium.git
+git clone https://github.com/dangrazh/bromium.git
 cd bromium
 
 # Build the project using maturin

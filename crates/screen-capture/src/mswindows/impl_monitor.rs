@@ -13,7 +13,7 @@ use windows::{
             GetDeviceCaps, GetMonitorInfoW, HDC, HMONITOR, HORZRES, MONITOR_DEFAULTTONULL,
             MONITORINFO, MONITORINFOEXW, MonitorFromPoint,
         },
-        System::{LibraryLoader::GetProcAddress, Threading::GetCurrentProcess},
+        System::LibraryLoader::GetProcAddress,
         UI::WindowsAndMessaging::MONITORINFOF_PRIMARY,
     },
     core::{BOOL, HRESULT, PCWSTR, s, w},
@@ -27,7 +27,7 @@ use crate::{
 use super::{
     capture::capture_monitor,
     impl_video_recorder::ImplVideoRecorder,
-    utils::{get_monitor_config, get_process_is_dpi_awareness, load_library},
+    utils::{get_current_process_dpi_awareness, get_monitor_config, load_library},
 };
 
 // A 函数与 W 函数区别
@@ -45,7 +45,7 @@ extern "system" fn monitor_enum_proc(
     state: LPARAM,
 ) -> BOOL {
     unsafe {
-        let state = Box::leak(Box::from_raw(state.0 as *mut Vec<HMONITOR>));
+        let state = &mut *(state.0 as *mut Vec<HMONITOR>);
         state.push(h_monitor);
 
         TRUE
@@ -88,8 +88,7 @@ type GetDpiForMonitor = unsafe extern "system" fn(
 
 fn get_hi_dpi_scale_factor(h_monitor: HMONITOR) -> ScreenCaptureResult<f32> {
     unsafe {
-        let current_process_is_dpi_awareness: bool =
-            get_process_is_dpi_awareness(GetCurrentProcess())?;
+        let current_process_is_dpi_awareness: bool = get_current_process_dpi_awareness()?;
 
         // 当前进程不感知 DPI，则回退到 GetDeviceCaps 获取 DPI
         if !current_process_is_dpi_awareness {
@@ -99,8 +98,9 @@ fn get_hi_dpi_scale_factor(h_monitor: HMONITOR) -> ScreenCaptureResult<f32> {
         let scope_guard_hmodule = load_library(w!("Shcore.dll"))?;
 
         let get_dpi_for_monitor_proc_address =
-            GetProcAddress(*scope_guard_hmodule, s!("GetDpiForMonitor"))
-                .ok_or(ScreenCaptureError::new("GetProcAddress GetDpiForMonitor failed"))?;
+            GetProcAddress(*scope_guard_hmodule, s!("GetDpiForMonitor")).ok_or(
+                ScreenCaptureError::new("GetProcAddress GetDpiForMonitor failed"),
+            )?;
 
         let get_dpi_for_monitor: GetDpiForMonitor =
             mem::transmute(get_dpi_for_monitor_proc_address);
@@ -279,7 +279,13 @@ impl ImplMonitor {
         capture_monitor(x, y, width as i32, height as i32)
     }
 
-    pub fn capture_region(&self, x: u32, y: u32, width: u32, height: u32) -> ScreenCaptureResult<RgbaImage> {
+    pub fn capture_region(
+        &self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> ScreenCaptureResult<RgbaImage> {
         // Validate region bounds
         let monitor_x = self.x()?;
         let monitor_y = self.y()?;
@@ -288,8 +294,8 @@ impl ImplMonitor {
 
         if width > monitor_width
             || height > monitor_height
-            || x as u32 + width > monitor_width
-            || y as u32 + height > monitor_height
+            || x + width > monitor_width
+            || y + height > monitor_height
         {
             return Err(ScreenCaptureError::InvalidCaptureRegion(format!(
                 "Region ({}, {}, {}, {}) is outside monitor bounds ({}, {}, {}, {})",

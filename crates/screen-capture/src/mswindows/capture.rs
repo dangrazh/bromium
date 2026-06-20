@@ -27,7 +27,27 @@ fn to_rgba_image(
     width: i32,
     height: i32,
 ) -> ScreenCaptureResult<RgbaImage> {
-    let buffer_size = width * height * 4;
+    if width <= 0 || height <= 0 {
+        return Err(ScreenCaptureError::InvalidCaptureRegion(format!(
+            "Invalid dimensions: {}x{}",
+            width, height
+        )));
+    }
+    let buffer_size: usize = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(4))
+        .ok_or_else(|| {
+            ScreenCaptureError::InvalidCaptureRegion(format!(
+                "Dimensions overflow: {}x{}",
+                width, height
+            ))
+        })?;
+    let bi_size_image: u32 = buffer_size.try_into().map_err(|_| {
+        ScreenCaptureError::InvalidCaptureRegion(format!(
+            "Buffer size {} exceeds u32 range",
+            buffer_size
+        ))
+    })?;
     let mut bitmap_info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -35,14 +55,14 @@ fn to_rgba_image(
             biHeight: -height,
             biPlanes: 1,
             biBitCount: 32,
-            biSizeImage: buffer_size as u32,
+            biSizeImage: bi_size_image,
             biCompression: 0,
             ..Default::default()
         },
         ..Default::default()
     };
 
-    let mut buffer = vec![0u8; buffer_size as usize];
+    let mut buffer = vec![0u8; buffer_size];
 
     unsafe {
         // read data into buffer
@@ -86,21 +106,28 @@ pub fn capture_monitor(x: i32, y: i32, width: i32, height: i32) -> ScreenCapture
 
         // in memory HDC，use DeleteDC to release it
         // https://learn.microsoft.com/zh-cn/windows/win32/api/wingdi/nf-wingdi-createcompatibledc
-        let scope_guard_mem = guard(
-            CreateCompatibleDC(Some(*scope_guard_hdc_desktop_window)),
-            |val| {
-                if !DeleteDC(val).as_bool() {
-                    log::error!("DeleteDC({:?}) failed: {:?}", val, GetLastError());
-                }
-            },
-        );
+        let hdc_mem = CreateCompatibleDC(Some(*scope_guard_hdc_desktop_window));
+        if hdc_mem.is_invalid() {
+            return Err(ScreenCaptureError::new(format!(
+                "CreateCompatibleDC failed: {:?}",
+                GetLastError()
+            )));
+        }
+        let scope_guard_mem = guard(hdc_mem, |val| {
+            if !DeleteDC(val).as_bool() {
+                log::error!("DeleteDC({:?}) failed: {:?}", val, GetLastError());
+            }
+        });
 
-        let scope_guard_h_bitmap = guard(
-            CreateCompatibleBitmap(*scope_guard_hdc_desktop_window, width, height),
-            delete_bitmap_object,
-        );
+        let h_bitmap = CreateCompatibleBitmap(*scope_guard_hdc_desktop_window, width, height);
+        if h_bitmap.is_invalid() {
+            return Err(ScreenCaptureError::new(format!(
+                "CreateCompatibleBitmap failed: {:?}",
+                GetLastError()
+            )));
+        }
+        let scope_guard_h_bitmap = guard(h_bitmap, delete_bitmap_object);
 
-        // 使用SelectObject函数将这个位图选择到DC中
         SelectObject(*scope_guard_mem, (*scope_guard_h_bitmap).into());
 
         // 拷贝原始图像到内存
@@ -158,15 +185,27 @@ pub fn capture_window(hwnd: HWND, scale_factor: f32) -> ScreenCaptureResult<Rgba
 
         // 内存中的HDC，使用 DeleteDC 函数释放
         // https://learn.microsoft.com/zh-cn/windows/win32/api/wingdi/nf-wingdi-createcompatibledc
-        let scope_guard_hdc_mem = guard(CreateCompatibleDC(Some(*scope_guard_hdc_window)), |val| {
+        let hdc_mem = CreateCompatibleDC(Some(*scope_guard_hdc_window));
+        if hdc_mem.is_invalid() {
+            return Err(ScreenCaptureError::new(format!(
+                "CreateCompatibleDC failed: {:?}",
+                GetLastError()
+            )));
+        }
+        let scope_guard_hdc_mem = guard(hdc_mem, |val| {
             if !DeleteDC(val).as_bool() {
                 log::error!("DeleteDC({:?}) failed: {:?}", val, GetLastError());
             }
         });
-        let scope_guard_h_bitmap = guard(
-            CreateCompatibleBitmap(*scope_guard_hdc_window, width, height),
-            delete_bitmap_object,
-        );
+
+        let h_bitmap = CreateCompatibleBitmap(*scope_guard_hdc_window, width, height);
+        if h_bitmap.is_invalid() {
+            return Err(ScreenCaptureError::new(format!(
+                "CreateCompatibleBitmap failed: {:?}",
+                GetLastError()
+            )));
+        }
+        let scope_guard_h_bitmap = guard(h_bitmap, delete_bitmap_object);
 
         let previous_object = SelectObject(*scope_guard_hdc_mem, (*scope_guard_h_bitmap).into());
 

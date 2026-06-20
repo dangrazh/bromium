@@ -1,4 +1,2 @@
-mod macros;
-
 mod winevent;
-pub use winevent::{WinEventMonitor, WinEvtMonitorEvent, Event, NamedEvent};
+pub use winevent::{Event, NamedEvent, WinEventMonitor, WinEvtMonitorEvent};

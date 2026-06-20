@@ -28,6 +28,9 @@ __pycache__/
 # C extensions
 *.so
 
+# AI related files
+docs_for_agents/
+
 # Distribution / packaging
 .Python
 .venv/

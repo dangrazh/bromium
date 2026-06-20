@@ -522,7 +522,7 @@ class WinDriver:
         - xpath (str): XPath that identifies an element in the application window
         
         Returns:
-        - bool: True if the application was successfully launched or activated
+        - Element: The UI element matching the provided XPath
         """
         pass
 

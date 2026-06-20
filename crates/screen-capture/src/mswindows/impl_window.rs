@@ -13,9 +13,7 @@ use windows::{
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
             ProcessStatus::{GetModuleBaseNameW, GetModuleFileNameExW},
-            Threading::{
-                GetCurrentProcess, GetCurrentProcessId, PROCESS_QUERY_LIMITED_INFORMATION,
-            },
+            Threading::{GetCurrentProcessId, PROCESS_QUERY_LIMITED_INFORMATION},
         },
         UI::WindowsAndMessaging::{
             EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindowLongPtrW,
@@ -31,7 +29,10 @@ use crate::error::ScreenCaptureResult;
 use super::{
     capture::capture_window,
     impl_monitor::ImplMonitor,
-    utils::{get_process_is_dpi_awareness, get_window_info, open_process},
+    utils::{
+        get_current_process_dpi_awareness, get_process_is_dpi_awareness, get_window_info,
+        open_process,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -39,6 +40,9 @@ pub(crate) struct ImplWindow {
     pub hwnd: HWND,
 }
 
+// SAFETY: HWND is a raw window handle (pointer-sized integer). Window handles are
+// process-global identifiers and can be safely used from any thread. Win32 window
+// message dispatch is thread-safe for cross-thread handle usage.
 unsafe impl Send for ImplWindow {}
 unsafe impl Sync for ImplWindow {}
 
@@ -156,7 +160,7 @@ fn is_valid_window(hwnd: HWND) -> bool {
 
 extern "system" fn enum_valid_windows(hwnd: HWND, state: LPARAM) -> BOOL {
     unsafe {
-        let state = Box::leak(Box::from_raw(state.0 as *mut Vec<HWND>));
+        let state = &mut *(state.0 as *mut Vec<HWND>);
 
         if is_valid_window(hwnd) {
             state.push(hwnd);
@@ -168,7 +172,7 @@ extern "system" fn enum_valid_windows(hwnd: HWND, state: LPARAM) -> BOOL {
 
 extern "system" fn enum_all_windows(hwnd: HWND, state: LPARAM) -> BOOL {
     unsafe {
-        let state = Box::leak(Box::from_raw(state.0 as *mut Vec<HWND>));
+        let state = &mut *(state.0 as *mut Vec<HWND>);
 
         state.push(hwnd);
 
@@ -424,18 +428,13 @@ impl ImplWindow {
     pub fn capture_image(&self) -> ScreenCaptureResult<RgbaImage> {
         // 在win10之后，不同窗口有不同的dpi，所以可能存在截图不全或者截图有较大空白，实际窗口没有填充满图片
         // 如果窗口不感知dpi，那么就不需要缩放，如果当前进程感知dpi，那么也不需要缩放
-        
-        println!("Preparing to capture window: {:?}", self.hwnd);
-        println!("getting scope guard handle...");
+
         let scope_guard_handle =
             open_process(PROCESS_QUERY_LIMITED_INFORMATION, false, self.pid()?)?;
-        println!("getting process is dpi awareness...");
         let window_is_dpi_awareness = get_process_is_dpi_awareness(*scope_guard_handle)?;
-        println!("getting current process is dpi awareness...");
-        let current_process_is_dpi_awareness =
-            unsafe { get_process_is_dpi_awareness(GetCurrentProcess())? };
+        let current_process_is_dpi_awareness = get_current_process_dpi_awareness()?;
 
-        println!("getting scale factor...");
+        #[allow(clippy::if_same_then_else)]
         let scale_factor = if !window_is_dpi_awareness {
             1.0
         } else if current_process_is_dpi_awareness {
@@ -443,7 +442,6 @@ impl ImplWindow {
         } else {
             self.current_monitor()?.scale_factor()?
         };
-        println!("caputring window now...");
         capture_window(self.hwnd, scale_factor)
     }
 }

@@ -1,5 +1,5 @@
-use std::thread;
 use screen_capture::Window;
+use std::thread;
 
 fn main() {
     thread::sleep(std::time::Duration::from_secs(3));

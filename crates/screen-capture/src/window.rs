@@ -12,7 +12,6 @@ impl Window {
     pub(crate) fn new(impl_window: ImplWindow) -> Window {
         Window { impl_window }
     }
-
 }
 
 impl From<HWND> for Window {

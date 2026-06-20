@@ -1,8 +1,8 @@
 // #![allow(dead_code)]
 
+use quick_xml::Error;
 use quick_xml::events::{BytesCData, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::writer::Writer;
-use quick_xml::Error;
 use std::io::Cursor;
 
 #[derive(Debug, Clone)]
@@ -18,12 +18,17 @@ impl XMLAttribute {
             value: value.to_string(),
         }
     }
-    
 }
 
 #[derive(Debug, Clone)]
 pub struct XMLAttributes {
     attributes: Vec<XMLAttribute>,
+}
+
+impl Default for XMLAttributes {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl XMLAttributes {
@@ -37,14 +42,10 @@ impl XMLAttributes {
         self.attributes.push(XMLAttribute::new(name, value));
     }
 
-    pub fn into_iter(self) -> impl Iterator<Item = Result<(String, String), Error>> {
-        self.attributes.into_iter().map(|attr| Ok((attr.name, attr.value)))
-    }
-
     pub fn is_empty(&self) -> bool {
         self.attributes.is_empty()
     }
-    
+
     pub fn len(&self) -> usize {
         self.attributes.len()
     }
@@ -54,10 +55,13 @@ impl XMLAttributes {
     }
 
     pub fn get(&self, name: &str) -> Option<&String> {
-        self.attributes.iter().find(|attr| attr.name == name).map(|attr| &attr.value)
+        self.attributes
+            .iter()
+            .find(|attr| attr.name == name)
+            .map(|attr| &attr.value)
     }
 
-    pub fn remove(&mut self, name: &str) -> Option<(String, String)>  {
+    pub fn remove(&mut self, name: &str) -> Option<(String, String)> {
         if let Some(pos) = self.attributes.iter().position(|attr| attr.name == name) {
             let removed = self.attributes.remove(pos);
             Some((removed.name, removed.value))
@@ -75,14 +79,35 @@ impl XMLAttributes {
     }
 
     pub fn get_all(&self) -> Vec<(String, String)> {
-        self.attributes.iter().map(|attr| (attr.name.clone(), attr.value.clone())).collect()
+        self.attributes
+            .iter()
+            .map(|attr| (attr.name.clone(), attr.value.clone()))
+            .collect()
     }
+}
 
+impl IntoIterator for XMLAttributes {
+    type Item = Result<(String, String), Error>;
+    type IntoIter = Box<dyn Iterator<Item = Self::Item>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(
+            self.attributes
+                .into_iter()
+                .map(|attr| Ok((attr.name, attr.value))),
+        )
+    }
 }
 
 #[derive(Clone)]
 pub struct XMLWriter {
-   writer: Writer<Cursor<Vec<u8>>>,
+    writer: Writer<Cursor<Vec<u8>>>,
+}
+
+impl Default for XMLWriter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl XMLWriter {
@@ -104,16 +129,23 @@ impl XMLWriter {
     }
 
     pub fn write_text(&mut self, content: &str) -> Result<(), Error> {
-        self.writer.write_event(Event::Text(BytesText::new(content)))?;
+        self.writer
+            .write_event(Event::Text(BytesText::new(content)))?;
         Ok(())
     }
 
     pub fn write_cdata(&mut self, content: &str) -> Result<(), Error> {
-        self.writer.write_event(Event::CData(BytesCData::new(content)))?;
+        self.writer
+            .write_event(Event::CData(BytesCData::new(content)))?;
         Ok(())
     }
 
-    pub fn write_element(&mut self, name: &str, content: &str, attrs: Option<XMLAttributes>) -> Result<(), Error> {
+    pub fn write_element(
+        &mut self,
+        name: &str,
+        content: &str,
+        attrs: Option<XMLAttributes>,
+    ) -> Result<(), Error> {
         let mut start = BytesStart::new(name);
         if let Some(attributes) = attrs {
             let mut key: &str;
@@ -124,11 +156,11 @@ impl XMLWriter {
                 value = attrs.1.as_str();
                 start.push_attribute((key, value));
             }
-
         }
 
         self.writer.write_event(Event::Start(start))?;
-        self.writer.write_event(Event::Text(BytesText::new(content)))?;
+        self.writer
+            .write_event(Event::Text(BytesText::new(content)))?;
         self.writer.write_event(Event::End(BytesEnd::new(name)))?;
         Ok(())
     }
@@ -136,11 +168,10 @@ impl XMLWriter {
     pub fn get_xml_raw(self) -> Vec<u8> {
         self.writer.into_inner().into_inner()
     }
-    
+
     pub fn get_xml_string(self) -> String {
         String::from_utf8(self.get_xml_raw()).unwrap()
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -177,10 +208,10 @@ impl XMLDomNode {
 
     pub fn get_first_child(&self) -> Option<&XMLDomNode> {
         if let Some(first) = self.children.first() {
-            return Some(first);
+            Some(first)
         } else {
             // println!("Warning: No children found for node: {:?}", self);
-            return None;
+            None
         }
         // self.children.first()
     }
@@ -188,6 +219,12 @@ impl XMLDomNode {
 
 pub struct XMLDomWriter {
     root: Option<XMLDomNode>,
+}
+
+impl Default for XMLDomWriter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl XMLDomWriter {
@@ -208,12 +245,15 @@ impl XMLDomWriter {
         if let Some(ref root) = self.root {
             // special handling to eliminate duplicate root node from the XML output
             // take the frist child of the root instead of the root itself
-            if let Some(ref first_child) = root.get_first_child() {
+            if let Some(first_child) = root.get_first_child() {
                 Self::write_node(&mut writer, first_child)?;
             } else {
                 // write the root node itself, as there is no duplicate root node
                 // this is a special case and should not happen in normal usage
-                println!("Warning: Root node has no children, writing root node itself: {:?}", root);
+                println!(
+                    "Warning: Root node has no children, writing root node itself: {:?}",
+                    root
+                );
                 Self::write_node(&mut writer, root)?;
             }
 
@@ -235,8 +275,9 @@ impl XMLDomWriter {
         for child in &node.children {
             Self::write_node(writer, child)?;
         }
-        writer.writer.write_event(Event::End(BytesEnd::new(node.name.as_str())))?;
+        writer
+            .writer
+            .write_event(Event::End(BytesEnd::new(node.name.as_str())))?;
         Ok(())
     }
 }
-

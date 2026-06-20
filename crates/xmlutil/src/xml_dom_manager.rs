@@ -1,9 +1,15 @@
 #![allow(dead_code)]
-use xot::{Xot, Node};
+use xot::{Node, Xot};
 
 pub struct XMLDomManager {
     dom_manager: Xot,
     document: Option<Node>,
+}
+
+impl Default for XMLDomManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl XMLDomManager {
@@ -37,10 +43,12 @@ impl XMLDomManager {
             self.dom_manager.append(*root_node, new_sub_tree)?;
             Ok(())
         } else {
-            Err(xot::Error::InvalidOperation("Root node is not set".to_string()))
+            Err(xot::Error::InvalidOperation(
+                "Root node is not set".to_string(),
+            ))
         }
     }
-    
+
     pub fn add_child_node(&mut self, parent: &Node, child: &Node) -> Result<(), xot::Error> {
         self.dom_manager.append(*parent, *child)?;
         Ok(())
@@ -53,22 +61,3 @@ impl XMLDomManager {
         Ok(())
     }
 }
-
-/* 
-fn add_child_node(parent: &Node, child: &Node) -> Result<(), xot::Error> {
-
-    let mut xot = Xot::new();
-    let root_doc = xot.parse(xml).unwrap();
-    let root_node = xot.document_element(root_doc).unwrap();
-    
-    let new_doc = xot.parse(xml2).unwrap();
-    let new_sub_tree = xot.document_element(new_doc).unwrap();
-    xot.append(root_node, new_sub_tree).unwrap();
-
-    let new_doc2 = xot.parse(xml3).unwrap();
-    let new_sub_tree2 = xot.document_element(new_doc2).unwrap();
-    xot.append(root_node, new_sub_tree2).unwrap();
-
-    parent.append_child(child)
-}
-*/

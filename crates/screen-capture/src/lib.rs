@@ -1,8 +1,8 @@
 mod error;
 mod monitor;
+mod mswindows;
 mod video_recorder;
 mod window;
-mod mswindows;
 
 pub use image;
 

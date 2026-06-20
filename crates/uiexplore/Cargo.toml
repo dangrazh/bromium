@@ -12,6 +12,7 @@ windows.workspace = true
 # chrono = "0.4.39"
 # windows = {version = "0.61.1", features = ["Win32_Graphics_Gdi", "Win32_Foundation", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"]}
 
+bromium-common = { path = "../bromium-common" }
 uitree = { path = "../uitree" }
 winevent-monitor = { path = "../winevent-monitor" }
 xmlutil = { path = "../xmlutil" }

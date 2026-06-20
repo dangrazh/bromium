@@ -1,22 +1,25 @@
 // use windows::Win32::Foundation::POINT;
 
-
 use windows::{
-    core::{Error, Result},
-    Win32::Foundation::{HWND, COLORREF, POINT, RECT},
-    Win32::Graphics::Gdi::{HOLLOW_BRUSH, PS_SOLID, Rectangle, CreatePen, GetStockObject, SelectObject, DeleteObject, GetDC,  ReleaseDC, InvalidateRect},
+    Win32::Foundation::{COLORREF, HWND, POINT, RECT},
+    Win32::Graphics::Gdi::{
+        CreatePen, DeleteObject, GetDC, GetStockObject, HOLLOW_BRUSH, InvalidateRect, PS_SOLID,
+        Rectangle, ReleaseDC, SelectObject,
+    },
     // Win32::UI::WindowsAndMessaging::*,
+    core::{Error, Result},
 };
 
-
 use uitree::UIElementInTreeXML;
-
 
 // TODO: Change the return value to contain both the element and the index
 //       and add the index as an input parameter as well to start looping from that index
 //       as the rectangles are sorted by size
-pub fn get_point_bounding_rect<'a>(point: &'a POINT, ui_elements: &'a Vec<UIElementInTreeXML>) -> Option<&'a UIElementInTreeXML> {
-// pub fn get_point_bounding_rect(point: &Pos2, ui_elements: &Vec<UIElementProps>) -> Option<&UIElementProps> {
+pub fn get_point_bounding_rect<'a>(
+    point: &'a POINT,
+    ui_elements: &'a Vec<UIElementInTreeXML>,
+) -> Option<&'a UIElementInTreeXML> {
+    // pub fn get_point_bounding_rect(point: &Pos2, ui_elements: &Vec<UIElementProps>) -> Option<&UIElementProps> {
     // printfmt!("Searching for element at point: {{ x: {}, y: {} }} in tree with {} elements.", point.x, point.y, ui_elements.len());
     // let mut cntr = 0;
     for element in ui_elements {
@@ -25,9 +28,12 @@ pub fn get_point_bounding_rect<'a>(point: &'a POINT, ui_elements: &'a Vec<UIElem
         // if cntr == 27 {
         //     dbg!(element);
         // }
-        let rect = element.get_element_props().get_element().get_bounding_rectangle();
-        if is_inside_rectancle(&rect, point.x, point.y) {
-            // printfmt!("point: {{ x: {}, y: {} }} searched elements: {} / Found element: {{ name: '{}', control_type: '{}' bounding_rect: {} }}", point.x, point.y, cntr, element.get_element_props().get_element().get_name(), element.get_element_props().get_element().get_control_type(), element.get_element_props().get_element().get_bounding_rectangle());            
+        let rect = element
+            .get_element_props()
+            .get_element()
+            .get_bounding_rectangle();
+        if is_inside_rectancle(rect, point.x, point.y) {
+            // printfmt!("point: {{ x: {}, y: {} }} searched elements: {} / Found element: {{ name: '{}', control_type: '{}' bounding_rect: {} }}", point.x, point.y, cntr, element.get_element_props().get_element().get_name(), element.get_element_props().get_element().get_control_type(), element.get_element_props().get_element().get_bounding_rectangle());
             return Some(element);
         }
     }
@@ -35,11 +41,9 @@ pub fn get_point_bounding_rect<'a>(point: &'a POINT, ui_elements: &'a Vec<UIElem
     None
 }
 
-
 pub fn is_inside_rectancle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> bool {
     x >= rect.get_left() && x <= rect.get_right() && y >= rect.get_top() && y <= rect.get_bottom()
 }
-
 
 pub fn draw_frame(rect: RECT, outline_width: i32) -> Result<()> {
     unsafe {

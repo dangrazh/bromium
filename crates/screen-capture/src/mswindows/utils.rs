@@ -1,4 +1,5 @@
 use std::mem;
+use std::sync::OnceLock;
 
 use image::RgbaImage;
 use scopeguard::{ScopeGuard, guard};
@@ -17,7 +18,7 @@ use windows::{
         System::{
             LibraryLoader::{GetProcAddress, LoadLibraryW},
             Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW},
-            Threading::{OpenProcess, PROCESS_ACCESS_RIGHTS},
+            Threading::{GetCurrentProcess, OpenProcess, PROCESS_ACCESS_RIGHTS},
         },
         UI::WindowsAndMessaging::{GetWindowInfo, WINDOWINFO},
     },
@@ -114,6 +115,15 @@ pub(super) fn get_process_is_dpi_awareness(process: HANDLE) -> ScreenCaptureResu
         // 当前进程不感知 DPI，则回退到 GetDeviceCaps 获取 DPI
         Ok(process_dpi_awareness != 0)
     }
+}
+
+pub(super) fn get_current_process_dpi_awareness() -> ScreenCaptureResult<bool> {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    if let Some(&val) = CACHED.get() {
+        return Ok(val);
+    }
+    let result = unsafe { get_process_is_dpi_awareness(GetCurrentProcess())? };
+    Ok(*CACHED.get_or_init(|| result))
 }
 
 pub(super) fn load_library(
@@ -263,7 +273,11 @@ mod tests {
     fn test_get_build_number() {
         let build = get_build_number();
         println!("build {}", build);
-        assert!(build == 26100, "build number should be 26100");
+        assert!(
+            build >= 22000,
+            "expected Windows 11+ build number (>= 22000), got {}",
+            build
+        );
     }
 
     #[test]

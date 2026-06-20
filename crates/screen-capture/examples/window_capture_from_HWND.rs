@@ -1,8 +1,7 @@
 use fs_extra::dir;
-use std::time::Instant;
 use screen_capture::Window;
+use std::time::Instant;
 // use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
-
 
 fn normalized(filename: &str) -> String {
     filename.replace(['|', '\\', ':', '/'], "")
@@ -11,7 +10,7 @@ fn normalized(filename: &str) -> String {
 fn main() {
     let start = Instant::now();
     let windows = Window::all().unwrap();
-    
+
     dir::create_all("target/windows", true).unwrap();
 
     let mut i = 0;
@@ -21,7 +20,6 @@ fn main() {
         }
 
         if window_in_loop.title().unwrap() == "windows – Datei-Explorer" {
-
             let window = Window::from(window_in_loop.hwnd().unwrap());
 
             println!(
@@ -38,7 +36,7 @@ fn main() {
                     window.is_maximized().unwrap()
                 )
             );
-    
+
             let image = window.capture_image().unwrap();
             image
                 .save(format!(
@@ -46,14 +44,11 @@ fn main() {
                     i,
                     normalized(&window.title().unwrap())
                 ))
-                .unwrap();    
-
+                .unwrap();
         }
-
 
         i += 1;
     }
-
 
     println!("Finished in: {:?}", start.elapsed());
 }

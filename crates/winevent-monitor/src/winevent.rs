@@ -1,16 +1,15 @@
 #![allow(unused)]
 
-use crate::printfmt;
+use bromium_common::{get_ui_automation_instance, printfmt};
 
-
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
-use std::sync::mpsc::{channel, Receiver, Sender};
 
 use uiautomation::types::Handle;
 use uiautomation::{UIAutomation, UIElement};
 
-pub use win_event_hook::events::{Event, NamedEvent};
 use win_event_hook::WinEventHook;
+pub use win_event_hook::events::{Event, NamedEvent};
 use win_event_hook::handles::OpaqueHandle;
 use win_event_hook::handles::builtins::WindowHandle;
 
@@ -22,53 +21,58 @@ pub struct WinEventMonitor {
     last_hwnd: HWND,
     mouse_hwnd: HWND,
     uia: UIAutomation,
+}
 
+impl Default for WinEventMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WinEventMonitor {
-
     pub fn new() -> Self {
-    
         // The mouse cursor constant (0x0) to filter mouse events later on
         let mouse_hwnd: HWND = HWND::default();
-            
+
         // create the hook
-        let (mut hook, rx) =  create_hook();
-        
-        let mut last_hwnd: HWND = HWND::default();
+        let (hook, rx) = create_hook();
+
+        let last_hwnd: HWND = HWND::default();
 
         // Initialize UIAutomation
-        let uia = get_ui_automation_instance().unwrap();
-        
+        let uia = get_ui_automation_instance()
+            .expect("Failed to create UIAutomation instance — COM may not be initialized");
 
-        WinEventMonitor { hook, rx_channel: rx, last_hwnd, mouse_hwnd, uia}
-
-    
+        WinEventMonitor {
+            hook,
+            rx_channel: rx,
+            last_hwnd,
+            mouse_hwnd,
+            uia,
+        }
     }
-        
+
     pub fn check_for_events(&mut self) -> Vec<WinEvtMonitorEvent> {
-        
         // println!("Checking for events in WinEventMonitor");
         let mut output: Vec<WinEvtMonitorEvent> = Vec::new();
 
-        // Main event processing 
+        // Main event processing
         let mut i = 0;
         let mut name = "no name retrieved".to_string();
         let mut rt_id: Vec<i32> = vec![0, 0, 0, 0];
 
-        // Check for new events
-        let mut rx_iter = self.rx_channel.try_iter();
-        if rx_iter.next().is_none() {
+        // Check for new events — use peekable() to avoid consuming the first event
+        let mut rx_iter = self.rx_channel.try_iter().peekable();
+        if rx_iter.peek().is_none() {
             // printfmt!("No WinEvents in channel");
             return output;
         }
 
         // let mut cnt = 0;
-        while let Some(event_info) = rx_iter.next() {
+        for event_info in rx_iter {
             // cnt += 1;
             let hwnd = *event_info.hwnd;
             if hwnd.0 != self.mouse_hwnd.0 {
-                
                 if self.last_hwnd.0 != hwnd.0 {
                     self.last_hwnd = hwnd;
 
@@ -88,7 +92,6 @@ impl WinEventMonitor {
                     //         name = "invalid hwnd".to_string();
                     //     }
                     // }
-
                 }
 
                 let evt_monitor_event = WinEvtMonitorEvent {
@@ -103,15 +106,13 @@ impl WinEventMonitor {
         // printfmt!("Processed {} WinEvents from channel", cnt);
         output
     }
-
 }
 
 impl Drop for WinEventMonitor {
     fn drop(&mut self) {
-        // Cleanup
-        self.hook.uninstall().unwrap();
-        // printfmt!("Hook uninstalled, exiting now");
-        
+        if let Err(e) = self.hook.uninstall() {
+            eprintln!("Failed to uninstall WinEvent hook during drop: {:?}", e);
+        }
     }
 }
 
@@ -124,7 +125,6 @@ pub struct WinEvtMonitorEvent {
 }
 
 impl WinEvtMonitorEvent {
-    
     pub fn get_event(&self) -> Event {
         self.event
     }
@@ -142,21 +142,22 @@ impl WinEvtMonitorEvent {
     }
 }
 
-
-
 #[derive(Debug)]
 struct WinEventInfo {
     event: Event,
     hwnd: OpaqueHandle<WindowHandle>,
 }
 
-fn create_event_handler(tx: Sender<WinEventInfo>) -> impl Fn(Event, OpaqueHandle<WindowHandle>, i32, i32, u32, u32) {
+fn create_event_handler(
+    tx: Sender<WinEventInfo>,
+) -> impl Fn(Event, OpaqueHandle<WindowHandle>, i32, i32, u32, u32) {
     move |ev, ohwnd: OpaqueHandle<WindowHandle>, _, _, _, _| {
         // printfmt!("Event received: {:?} on hwnd: {:?}", ev, ohwnd);
-        tx.send(WinEventInfo { 
-            event: ev, 
+        tx.send(WinEventInfo {
+            event: ev,
             hwnd: ohwnd,
-        }).unwrap_or_else(|e| eprintln!("Failed to send event: {}", e));
+        })
+        .unwrap_or_else(|e| eprintln!("Failed to send event: {}", e));
         // printfmt!("Event sent to channel");
     }
 }
@@ -176,7 +177,7 @@ fn create_hook() -> (WinEventHook, Receiver<WinEventInfo>) {
             Event::Named(NamedEvent::ObjectShow),
             // An object is hidden. The system sends this event for the following user interface elements: caret and cursor. Server applications send this event for their accessible objects.
             // When this event is generated for a parent object, all child objects are already hidden. Server applications do not send this event for the child objects.
-            // Hidden objects include the STATE_SYSTEM_INVISIBLE flag; shown objects do not include this flag. The EVENT_OBJECT_HIDE event also indicates that the STATE_SYSTEM_INVISIBLE flag is set. Therefore, servers do not send the EVENT_STATE_CHANGE event in this case.            
+            // Hidden objects include the STATE_SYSTEM_INVISIBLE flag; shown objects do not include this flag. The EVENT_OBJECT_HIDE event also indicates that the STATE_SYSTEM_INVISIBLE flag is set. Therefore, servers do not send the EVENT_STATE_CHANGE event in this case.
             Event::Named(NamedEvent::ObjectHide),
             // An object has been created. The system sends this event for the following user interface elements: caret, header control, list-view control, tab control, toolbar control, tree view control, and window object. Server applications send this event for their accessible objects.
             // Before sending the event for the parent object, servers must send it for all of an object's child objects. Servers must ensure that all child objects are fully created and ready to accept IAccessible calls from clients before the parent object sends this event.
@@ -184,7 +185,7 @@ fn create_hook() -> (WinEventHook, Receiver<WinEventInfo>) {
             Event::Named(NamedEvent::ObjectCreate),
             // An object has been destroyed. The system sends this event for the following user interface elements: caret, header control, list-view control, tab control, toolbar control, tree view control, and window object. Server applications send this event for their accessible objects.
             // Clients assume that all of an object's children are destroyed when the parent object sends this event.
-            // After receiving this event, clients do not call an object's IAccessible properties or methods. However, the interface pointer must remain valid as long as there is a reference count on it (due to COM rules), but the UI element may no longer be present. Further calls on the interface pointer may return failure errors; to prevent this, servers create proxy objects and monitor their life spans.            
+            // After receiving this event, clients do not call an object's IAccessible properties or methods. However, the interface pointer must remain valid as long as there is a reference count on it (due to COM rules), but the UI element may no longer be present. Further calls on the interface pointer may return failure errors; to prevent this, servers create proxy objects and monitor their life spans.
             Event::Named(NamedEvent::ObjectDestroy),
             // An object has changed location, shape, or size. The system sends this event for the following user interface elements: caret and window objects. Server applications send this event for their accessible objects.
             // This event is generated in response to a change in the top-level object within the object hierarchy; it is not generated for any children that the object might have. For example, if the user resizes a window, the system sends this notification for the window, but not for the menu bar, title bar, scroll bar, or other objects that have also changed.
@@ -201,37 +202,7 @@ fn create_hook() -> (WinEventHook, Receiver<WinEventInfo>) {
     // Create handler and install hook
     printfmt!("Installing hook");
     let handler = create_event_handler(tx);
-    let hook = win_event_hook::WinEventHook::install(config, handler).unwrap();
+    let hook = win_event_hook::WinEventHook::install(config, handler)
+        .expect("Failed to install WinEvent hook");
     (hook, rx)
-}
-
-
-fn get_ui_automation_instance() -> Option<UIAutomation> {
-
-    let uia: UIAutomation;
-    let uia_res = UIAutomation::new();
-    
-    match uia_res {
-        Ok(uia_ok) => {
-            uia = uia_ok;
-            // printfmt!("UIAutomation instance created successfully.");
-        },
-        Err(e) => {
-            printfmt!("Failed to create UIAutomation instance, trying direct method: {:?}", e);
-            let uia_direct_res = UIAutomation::new_direct();
-            match uia_direct_res {
-                Ok(uia_direct_ok) => {
-                    uia = uia_direct_ok;
-                    printfmt!("UIAutomation instance created successfully using direct method.");
-                },
-                Err(e_direct) => {
-                    printfmt!("Failed to create UIAutomation instance using direct method: {:?}", e_direct);
-                    return None; // Return None if we cannot create a UIAutomation instance
-                }
-            }
-        }
-        
-    }
-    Some(uia)
-
 }

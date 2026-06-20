@@ -3,7 +3,8 @@ use std::sync::mpsc::Receiver;
 use image::RgbaImage;
 
 use crate::{
-    VideoRecorder, error::ScreenCaptureResult, mswindows::impl_monitor::ImplMonitor, video_recorder::Frame,
+    VideoRecorder, error::ScreenCaptureResult, mswindows::impl_monitor::ImplMonitor,
+    video_recorder::Frame,
 };
 
 #[derive(Debug, Clone)]
@@ -88,7 +89,13 @@ impl Monitor {
         self.impl_monitor.capture_image()
     }
 
-    pub fn capture_region(&self, x: u32, y: u32, width: u32, height: u32) -> ScreenCaptureResult<RgbaImage> {
+    pub fn capture_region(
+        &self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> ScreenCaptureResult<RgbaImage> {
         self.impl_monitor.capture_region(x, y, width, height)
     }
 

@@ -20,7 +20,7 @@ image = ["image/default"]
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
-log = "0.4"
+log.workspace = true
 scopeguard = "1.2"
 thiserror = "2.0"
 

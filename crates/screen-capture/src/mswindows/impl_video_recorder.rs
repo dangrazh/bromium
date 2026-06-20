@@ -107,7 +107,8 @@ impl ImplVideoRecorder {
                 None,
             )?;
 
-            let d3d_device = d3d_device.ok_or(ScreenCaptureError::new("Call D3D11CreateDevice failed"))?;
+            let d3d_device =
+                d3d_device.ok_or(ScreenCaptureError::new("Call D3D11CreateDevice failed"))?;
             let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
             let d3d_context = d3d_device.GetImmediateContext()?;
 
@@ -165,8 +166,8 @@ impl ImplVideoRecorder {
                         _ => {
                             // 如何确定 AcquireNextFrame 执行成功
                             if frame_info.LastPresentTime != 0 {
-                                let resource =
-                                    resource.ok_or(ScreenCaptureError::new("AcquireNextFrame failed"))?;
+                                let resource = resource
+                                    .ok_or(ScreenCaptureError::new("AcquireNextFrame failed"))?;
                                 let source_texture = resource.cast::<ID3D11Texture2D>()?;
                                 let frame =
                                     texture_to_frame(&d3d_device, &d3d_context, source_texture)?;

@@ -1,35 +1,37 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-#[macro_use]
 mod macros;
 
-use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+use bromium_common::printfmt;
+use windows::Win32::Foundation::{HANDLE, POINT};
 use windows::Win32::Graphics::Gdi::{MONITOR_FROM_FLAGS, MonitorFromPoint};
-use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, DPI_AWARENESS_PER_MONITOR_AWARE, MONITOR_DPI_TYPE, GetDpiForMonitor, SetProcessDpiAwarenessContext, GetDpiAwarenessContextForProcess, GetAwarenessFromDpiAwarenessContext}; //DPI_AWARENESS, DPI_AWARENESS_CONTEXT, GetThreadDpiAwarenessContext
-use windows::Win32::Foundation::{POINT, HANDLE};
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, DPI_AWARENESS_PER_MONITOR_AWARE,
+    GetAwarenessFromDpiAwarenessContext, GetDpiAwarenessContextForProcess, GetDpiForMonitor,
+    MONITOR_DPI_TYPE, SetProcessDpiAwarenessContext,
+}; //DPI_AWARENESS, DPI_AWARENESS_CONTEXT, GetThreadDpiAwarenessContext
+use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
-
-mod rectangle;
 mod commons;
+mod rectangle;
 
 mod app_ui;
 use app_ui::UIExplorer;
 
 use ::uiexplore::signal_file;
-use uitree::{UITreeXML, get_all_elements_xml};
+use uitree::{UITreeError, UITreeXML, get_all_elements_xml};
 
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
-use std::sync::mpsc::{channel, Receiver, Sender};
 
-use eframe::{egui, NativeOptions, Renderer};
+use eframe::{NativeOptions, Renderer, egui};
 
 fn main() -> eframe::Result {
-
     let app_name = "UI Explore";
-    
+
     printfmt!("Getting the ui tree");
     // get the ui tree in a separate thread
-    let (tx, rx): (Sender<_>, Receiver<UITreeXML>) = channel();
+    let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
     thread::spawn(|| {
         get_all_elements_xml(tx, None, None, Some(app_name.to_string()), None);
     });
@@ -37,9 +39,12 @@ fn main() -> eframe::Result {
 
     printfmt!("displaying start screen now");
     launch_start_screen();
-    
-    let ui_tree = rx.recv().unwrap();
-    
+
+    let ui_tree = rx
+        .recv()
+        .expect("Failed to receive UI tree from thread")
+        .expect("UI tree build failed");
+
     signal_file::create_signal_file().unwrap();
     printfmt!("UI Tree retrieved, setting up UIExplorer app...");
 
@@ -56,12 +61,12 @@ fn main() -> eframe::Result {
     // };
 
     let options = NativeOptions {
-        renderer: Renderer::Wgpu, 
+        renderer: Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
-                    .with_inner_size([app_size_pos.app_width as f32, app_size_pos.app_height as f32])
-                    .with_position(egui::Pos2::new(app_size_pos.app_left as f32, app_size_pos.app_top as f32))
-                    .with_resizable(true),
-                    // .with_icon(icon),
+            .with_inner_size([app_size_pos.app_width, app_size_pos.app_height])
+            .with_position(egui::Pos2::new(app_size_pos.app_left, app_size_pos.app_top))
+            .with_resizable(true),
+        // .with_icon(icon),
         ..Default::default()
     };
 
@@ -70,9 +75,12 @@ fn main() -> eframe::Result {
         options,
         Box::new(|_cc| {
             // create the app itself
-            Ok(Box::new(UIExplorer::new_with_state(app_name.to_owned(), app_size_pos, ui_tree)))
+            Ok(Box::new(UIExplorer::new_with_state(
+                app_name.to_owned(),
+                app_size_pos,
+                ui_tree,
+            )))
         }),
-
     )
 }
 
@@ -95,7 +103,15 @@ struct AppContext {
 }
 
 impl AppContext {
-    fn new(screen_width: i32, screen_height: i32, screen_scale: f32, app_width: f32, app_height: f32, app_left: f32, app_top: f32) -> Self {
+    fn new(
+        screen_width: i32,
+        screen_height: i32,
+        screen_scale: f32,
+        app_width: f32,
+        app_height: f32,
+        app_left: f32,
+        app_top: f32,
+    ) -> Self {
         Self {
             screen_width,
             screen_height,
@@ -108,16 +124,23 @@ impl AppContext {
     }
 
     fn new_from_screen(horizontal_scaling: f32, vertical_scaling: f32) -> Self {
-        
         let screen_size = get_system_metrics();
         let screen_width = screen_size.width;
-        let screen_height = screen_size.height; 
+        let screen_height = screen_size.height;
         let screen_scale = get_screen_scale_factor();
         let app_width = screen_width as f32 * horizontal_scaling;
         let app_height = screen_height as f32 * vertical_scaling;
         let app_left = screen_width as f32 / 2.0 - app_width / 2.0;
         let app_top = screen_height as f32 / 2.0 - app_height / 2.0;
-        Self::new(screen_width, screen_height, screen_scale, app_width, app_height, app_left, app_top)
+        Self::new(
+            screen_width,
+            screen_height,
+            screen_scale,
+            app_width,
+            app_height,
+            app_left,
+            app_top,
+        )
     }
 }
 
@@ -126,17 +149,20 @@ fn get_system_metrics() -> ScreenSize {
         let x = GetSystemMetrics(SM_CXSCREEN);
         let y = GetSystemMetrics(SM_CYSCREEN);
         // println!("Screen size: {}x{}", x, y);
-        ScreenSize { width: x, height: y }
+        ScreenSize {
+            width: x,
+            height: y,
+        }
     }
 }
 
 fn get_screen_scale_factor() -> f32 {
-
     unsafe {
         // First we need to set the DPI awareness context to per monitor aware
         // This is required to get the correct DPI for the monitor
-        let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_FROM_FLAGS { 0: 2 });
-        let _res_dpi_awareness_context = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+        let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_FROM_FLAGS(2));
+        let _res_dpi_awareness_context =
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
         let dpi_awareness_process = GetDpiAwarenessContextForProcess(HANDLE(std::ptr::null_mut()));
         let awareness_process = GetAwarenessFromDpiAwarenessContext(dpi_awareness_process);
 
@@ -146,13 +172,12 @@ fn get_screen_scale_factor() -> f32 {
             _ => {
                 awareness_fmt = format!("Unknown DPI Awareness: {:?}", awareness_process);
                 awareness_fmt.as_str()
-                },
+            }
         };
 
         let mut dpi_x = 0;
         let mut dpi_y = 0;
-        let _res = GetDpiForMonitor(monitor, MONITOR_DPI_TYPE {0: 0}, &mut dpi_x, &mut dpi_y);
-
+        let _res = GetDpiForMonitor(monitor, MONITOR_DPI_TYPE(0), &mut dpi_x, &mut dpi_y);
 
         // println!("DPI: ({}, {}), Awareness Process: {:?}", dpi_x, dpi_y, awareness);
 
@@ -161,26 +186,21 @@ fn get_screen_scale_factor() -> f32 {
         let scale_x = dpi_x as f32 / 96.0;
         let scale_y = dpi_y as f32 / 96.0;
         let scale = (scale_x + scale_y) / 2.0;
-        println!("Screen size: {}x{}, DPI: {}x{}, Awareness Process: {}, Scale: {}", x, y, dpi_x, dpi_y, awareness, scale);
+        println!(
+            "Screen size: {}x{}, DPI: {}x{}, Awareness Process: {}, Scale: {}",
+            x, y, dpi_x, dpi_y, awareness, scale
+        );
 
         scale
     }
-
-
 }
 
 #[allow(dead_code)]
 fn launch_start_screen() {
-
-    let msg: &str;
-
-    let cmd = std::process::Command::new("start_screen.exe").spawn();
-
-    match cmd {
-        Ok(_) => { msg = "Start Screen successfully launched"; }
-        Err(_) => { msg = "Failed to launch Start Screen"; }
-    }
+    let msg = match std::process::Command::new("start_screen.exe").spawn() {
+        Ok(_) => "Start Screen successfully launched",
+        Err(_) => "Failed to launch Start Screen",
+    };
 
     printfmt!("{}", msg);
 }
-

@@ -1,5 +1,5 @@
-use std::{thread, time::Duration};
 use screen_capture::Monitor;
+use std::{thread, time::Duration};
 
 fn main() {
     let monitor = Monitor::from_point(100, 100).unwrap();

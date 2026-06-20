@@ -1,18 +1,20 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/bromium", 
-    "crates/screen-capture", 
+    "crates/bromium",
+    "crates/bromium-common",
+    "crates/screen-capture",
     "crates/uiexplore",
-    "crates/uitree", 
+    "crates/uitree",
     "crates/xmlutil",
-    "crates/winevent-monitor", 
+    "crates/winevent-monitor",
 ]
 
 [workspace.dependencies]
 uiautomation = "0.22.2"
 chrono = "0.4.41"
 log = {version = "0.4", features = ["std"] }
+xot = "0.31.2"
 windows = { version = "0.61.1", features = ["Win32_Graphics_Gdi", "Win32_Foundation", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility"] }
 
 [profile.release-with-debug]

@@ -1,5 +1,5 @@
-use std::time::Instant;
 use screen_capture::Monitor;
+use std::time::Instant;
 
 fn main() {
     let start = Instant::now();

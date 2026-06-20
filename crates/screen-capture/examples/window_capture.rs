@@ -1,6 +1,6 @@
 use fs_extra::dir;
-use std::time::Instant;
 use screen_capture::Window;
+use std::time::Instant;
 
 fn normalized(filename: &str) -> String {
     filename.replace(['|', '\\', ':', '/'], "")
