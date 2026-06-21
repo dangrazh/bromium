@@ -1,83 +1,86 @@
-from bromium import Bromium, WinDriver
+"""
+Bromium App Launch Example
+===========================
+
+Demonstrates launching/activating an application and interacting with it:
+  1. Initialize logging with console output
+  2. Create a WinDriver
+  3. Launch or activate an application
+  4. Refresh the UI tree
+  5. Interact with elements in the application
+"""
+
 import time
-import os
+
+import bromium
 
 def demo_app_launch():
     print("Testing bromium app launch/activation functionality...")
-    
-    #initialize Bromium logging
-    print("Initializing Bromium logging...")
-    Bromium.init_logging(log_path=None, log_level="Info", enable_console=True, enable_file=True)
-    
-    # Create a WinDriver instance
-    print("Getting WinDriver Instance...")
-    driver = WinDriver(timeout_ms=5, window_title=None)
-    print("WinDriver instance obtained.")
-    no_of_elements = driver.get_no_of_ui_elements()
-    print(f"Driver has {no_of_elements} elements.")
-    # Path to Windows Calculator (available on all Windows systems)
-    # app_path = r"C:\Windows\System32\calc.exe"
-    # XPath for Calculator
-    # This is a sample XPath for the Calculator window and the "9" button
-    # xpath = r'/Pane[@ClassName="#32769"][@Name="Desktop 1"]/Window[@ClassName="ApplicationFrameWindow"][@Name="Calculator"]/Window[@ClassName="Windows.UI.Core.CoreWindow"][@Name="Calculator"]/Custom[@AutomationId="NavView"]/Group[@ClassName="LandmarkTarget"]/Group[@Name="Number pad"][@AutomationId="NumberPad"]/Button[@Name="Nine"][@AutomationId="num9Button"]'
 
-    # Path to MS Teams
+    # ─── 1. Initialize logging ────────────────────────────────────────────────
+    bromium.init_logging(log_level="Info", enable_console=True, enable_file=True)
+
+    # ─── 2. Create a WinDriver ───────────────────────────────────────────────
+    print("Creating WinDriver instance...")
+    driver = bromium.WinDriver(timeout_ms=5000, window_title=None)
+    print(f"WinDriver created with {driver.element_count} elements.")
+
+    # ─── 3. Launch or activate an application ─────────────────────────────────
+    # Example: MS Teams
     app_path = r"ms-teams.exe"
-    # XPath for MS Teams
-    # This is a sample XPath for the Teams window 
     xpath = r"/Pane[@Name='Desktop 1']/Window[@Name='Microsoft Teams']"
 
-    file_name = os.path.basename(app_path)
-    print(f"Launching/activating {file_name} with path: {app_path}")
-    
-    # Try to launch or activate the application
+    print(f"Launching/activating: {app_path}")
+
     try:
         app_window = driver.launch_or_activate_app(app_path, xpath)
-        print(f"First attempt to launch/activate {file_name} returned: {app_window}")
-        print(f"{app_window} should now be in focus")
-            
-        # Wait a moment to observe the result
-        time.sleep(3)
-        
-        # Reload the driver to ensure we have the latest UI tree
-        driver = driver.reload()
-        no_of_elements = driver.get_no_of_ui_elements()
-        print(f"Driver reloaded to refresh UI tree. It now has {no_of_elements} elements.")
- 
-        # Increase logging level to Trace for detailed output
-        # print("Setting Bromium log level to Trace for detailed output...")
-        # Bromium.set_log_level("Trace")
+        print(f"Application window: {app_window!r}")
+        print(f"  name: {app_window.name}")
+        print(f"  control_type: {app_window.control_type}")
 
-        # Teams login - if required
-        xpath_login_button = r"//Button[@Name='Sign in']"
+        # Wait for the window to settle
+        time.sleep(3)
+
+        # ─── 4. Refresh the UI tree ──────────────────────────────────────────
+        # refresh() mutates the driver in place (no need to reassign)
+        driver.refresh(window_title="Microsoft Teams")
+        print(f"UI tree refreshed. Now has {driver.element_count} elements.")
+
+        # ─── 5. Interact with the application ────────────────────────────────
+        # Example: look for a Sign-in button (if not already logged in)
+        xpath_login = r"//Button[@Name='Sign in']"
         try:
-            login_button = driver.get_element_by_xpath(xpath_login_button, None)
-            # if this does not raise an exception, the button was found, hence we need to login
-            print("Login button found, performing login...")
+            login_button = driver.get_element_by_xpath(xpath_login, timeout_ms=3000)
+            print("Login button found, clicking...")
             login_button.send_click()
-            print("Clicked the login button.")
-            # give it some time to process
             time.sleep(2)
+
+            # Refresh and fill in username
             driver.refresh(None)
             xpath_username = r"//Edit[@Name='E-Mail-Adresse, Telefonnummer oder Skype-Name']"
             try:
-                username_field = driver.get_element_by_xpath(xpath_username, None)
-                username_field.send_keys("john.doe@gmail.com")
-            except Exception as e:
-                print(f"Username field not found, aborting login. got error: {e}")
-        except Exception as e:
-            print(f"Login button not found, assuming already logged in. got error: {e}")
-    except Exception as e:
-        print(f"Error during launch/activation of {file_name}: {e}")        
-    
-    print("Part 1 of test completed!")
+                username_field = driver.get_element_by_xpath(xpath_username, timeout_ms=3000)
+                username_field.send_text("john.doe@example.com")
+            except bromium.ElementNotFoundError as e:
+                print(f"Username field not found: {e}")
 
-    print("Getting a new WinDriver instance to check if the MS Teams is running...")
-    driver1 = WinDriver(timeout_ms=5, window_title="Microsoft Teams")
-    no_of_elements = driver1.get_no_of_ui_elements()
-    print(f"New Driver instance has {no_of_elements} elements.")
+        except bromium.ElementNotFoundError:
+            print("Login button not found — assuming already logged in.")
 
-    print("Test completed!")
+    except bromium.AutomationError as e:
+        print(f"Error during launch/activation: {e}")
+
+    # ─── 6. Create a scoped driver for verification ──────────────────────────
+    print("\nCreating scoped WinDriver for Microsoft Teams...")
+    teams_driver = bromium.WinDriver(timeout_ms=5000, window_title="Microsoft Teams")
+    print(f"Scoped driver has {teams_driver.element_count} elements.")
+
+    # Show some element types in the Teams window
+    buttons = teams_driver.find_elements(control_type="Button")
+    print(f"Found {len(buttons)} buttons in Teams window")
+
+    print("\nDemo completed!")
+
 
 if __name__ == "__main__":
     demo_app_launch()

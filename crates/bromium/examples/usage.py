@@ -1,37 +1,69 @@
-# from time import sleep
-from bromium import WinDriver
+"""
+Bromium Quickstart Example
+===========================
 
-# Create a WinDriver instance with a timeout value
-driver = WinDriver(5)
+Demonstrates the core workflow:
+  1. Initialize logging
+  2. Create a WinDriver (builds the UI tree)
+  3. Inspect cursor position and element at that point
+  4. Look up an element by XPath
+  5. Click the element
+"""
 
-# Get screen context information
+import bromium
+
+# ─── 1. Initialize logging (optional but helpful for debugging) ───────────────
+bromium.init_logging(log_level="Info", enable_console=True)
+print(f"bromium version: {bromium.get_version()}")
+
+# ─── 2. Create a WinDriver ───────────────────────────────────────────────────
+# timeout_ms is the default retry duration when an element isn't found immediately.
+# window_title filters the tree to a specific window (None = full desktop, depth 2).
+driver = bromium.WinDriver(timeout_ms=5000, window_title=None)
+
+print(f"Driver: {driver!r}")
+print(f"Elements in tree: {len(driver)}")
+
+# ─── 3. Screen info ──────────────────────────────────────────────────────────
 screen_context = driver.get_screen_context()
-sreens = screen_context.get_screens()
-print(f"Number of screens: {len(sreens)}")
-print(f"Primary screen information: {repr(screen_context.get_primary_screen())}")
-# print(f"Screen width: {screen_context.get_screen_width()}")
-# print(f"Screen height: {screen_context.get_screen_height()}")
-# print(f"Screen scale: {screen_context.get_screen_scale()}")
+print(f"Number of screens: {len(screen_context.screens)}")
+print(f"Primary screen: {screen_context.primary_screen!r}")
 
-# Get current cursor position
-x, y = driver.get_curser_pos()
+# ─── 4. Cursor position & element at that point ──────────────────────────────
+x, y = driver.get_cursor_pos()
 print(f"Current cursor position: ({x}, {y})")
 
-# Get UI element at specific coordinates
-element = driver.get_ui_element(x, y)
-print(f"Returned element: {repr(element)}")
-print(f"UI Element name: {element.get_name()}")
-print(f"UI Element xpath: {element.get_xpath()}")
-print(f"UI Element handle: {element.get_handle()}")
+try:
+    element = driver.get_element_by_coordinates(x, y)
+    print(f"Element at cursor: {element!r}")
+    print(f"  name: {element.name}")
+    print(f"  control_type: {element.control_type}")
+    print(f"  xpath: {element.xpath}")
+    print(f"  bounding_rectangle: {element.bounding_rectangle}")
+except bromium.ElementNotFoundError as e:
+    print(f"No element at cursor position: {e}")
 
-xpath = element.get_xpath()
+# ─── 5. XPath-based lookup ───────────────────────────────────────────────────
+# Use the xpath from the element we just found (if any)
+if element:
+    xpath = element.xpath
+    try:
+        found = driver.get_element_by_xpath(xpath)
+        print(f"\nLooked up by XPath: {found.name} ({found.control_type})")
+    except bromium.ElementNotFoundError as e:
+        print(f"XPath lookup failed: {e}")
 
-# Get UI element by XPath
-element_by_xpath = driver.get_ui_element_by_xpath(xpath)
-print(f"XPath based UI Element name: {element_by_xpath.get_name()}")
-print(f"Returned xpath based element: {repr(element_by_xpath)}")
+# ─── 6. Iterate & filter elements ────────────────────────────────────────────
+# Check if an xpath exists in the tree
+print(f"\nXPath exists in tree: {xpath in driver}")
 
-# Click the UI element
-print(f"Clicking UI Element {element_by_xpath.get_name()} now...")
-element_by_xpath.send_click()
-print("Click action completed.")
+# Find all buttons in the tree
+buttons = driver.find_elements(control_type="Button")
+print(f"Found {len(buttons)} buttons in the UI tree")
+for btn in buttons[:5]:  # Show first 5
+    print(f"  - {btn.name}")
+
+# ─── 7. Click an element ─────────────────────────────────────────────────────
+# Uncomment to actually click:
+# found.send_click()
+# print("Click action completed.")

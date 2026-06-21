@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use xot::{Node, Xot};
 
 pub struct XMLDomManager {

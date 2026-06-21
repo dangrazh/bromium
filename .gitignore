@@ -96,3 +96,6 @@ docs/_build/
 
 # Pyenv
 .python-version
+
+# tokensave
+.tokensave/

@@ -1,58 +1,57 @@
 use crate::UITreeMap;
+use crate::common_types::{UIElementInTree, match_original_format};
 use crate::error::UITreeError;
-use bromium_common::{format_runtime_id, printfmt};
+use crate::save_ui_element::SaveUIElement;
+use bromium_common::{format_runtime_id, format_runtime_id_dotted, printfmt};
 
 use std::sync::mpsc::Sender;
 use uiautomation::core::UIAutomation;
 use uiautomation::{UIElement, UITreeWalker};
 
 #[derive(Debug, Clone)]
-pub struct UIElementInTree {
-    element_props: SaveUIElement,
-    tree_index: usize,
-}
-
-impl UIElementInTree {
-    pub fn new(element_props: SaveUIElement, tree_index: usize) -> Self {
-        UIElementInTree {
-            element_props,
-            tree_index,
-        }
-    }
-
-    pub fn get_element_props(&self) -> &SaveUIElement {
-        &self.element_props
-    }
-
-    pub fn get_tree_index(&self) -> usize {
-        self.tree_index
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct UITree {
-    tree: UITreeMap<SaveUIElement>,
+    tree: UITreeMap<()>,
     ui_elements: Vec<UIElementInTree>,
+    node_to_elem: Vec<usize>,
 }
 
 impl UITree {
-    pub fn new(tree: UITreeMap<SaveUIElement>, ui_elements: Vec<UIElementInTree>) -> Self {
-        UITree { tree, ui_elements }
+    pub fn new(tree: UITreeMap<()>, ui_elements: Vec<UIElementInTree>) -> Self {
+        let node_to_elem = Self::build_node_to_elem(&tree, &ui_elements);
+        UITree {
+            tree,
+            ui_elements,
+            node_to_elem,
+        }
     }
 
-    pub fn get_tree(&self) -> &UITreeMap<SaveUIElement> {
+    fn build_node_to_elem(tree: &UITreeMap<()>, elements: &[UIElementInTree]) -> Vec<usize> {
+        let mut map = vec![0; tree.node_count()];
+        for (pos, elem) in elements.iter().enumerate() {
+            let ti = elem.get_tree_index();
+            if ti < map.len() {
+                map[ti] = pos;
+            }
+        }
+        map
+    }
+
+    pub fn get_tree(&self) -> &UITreeMap<()> {
         &self.tree
     }
 
-    pub fn get_elements(&self) -> &Vec<UIElementInTree> {
+    pub fn get_elements(&self) -> &[UIElementInTree] {
         &self.ui_elements
     }
 
-    pub fn for_each<F>(&self, f: F)
+    pub fn for_each<F>(&self, mut f: F)
     where
         F: FnMut(usize, &SaveUIElement),
     {
-        self.tree.for_each(f);
+        self.tree.for_each(|idx, _| {
+            let elem_pos = self.node_to_elem[idx];
+            f(idx, self.ui_elements[elem_pos].get_element_props());
+        });
     }
 
     pub fn root(&self) -> usize {
@@ -64,16 +63,13 @@ impl UITree {
     }
 
     pub fn node(&self, index: usize) -> (&str, &SaveUIElement) {
-        let node = &self.tree.node(index);
-        (&node.name, &node.data)
+        let node = self.tree.node(index);
+        let elem_pos = self.node_to_elem[index];
+        (&node.name, self.ui_elements[elem_pos].get_element_props())
     }
 
     pub fn get_xpath_for_element(&self, index: usize) -> String {
         let path = self.get_xpath_raw_for_element(index);
-        // path
-        // println!("Raw XPath: {}", path);
-
-        // println!("Formatted XPath: {}", xpath);
         match_original_format(&path)
     }
 
@@ -82,37 +78,20 @@ impl UITree {
 
         let path_to_element = self.tree.get_path_to_element(index);
         if path_to_element.is_empty() {
-            return "/".to_string(); // Return root if no path
+            return "/".to_string();
         }
 
         for &node_index in path_to_element.iter() {
-            let node = &self.tree.node(node_index);
-            let ui_elem_props = &node.data;
+            let elem_pos = self.node_to_elem[node_index];
+            let ui_elem_props = self.ui_elements[elem_pos].get_element_props();
 
-            let mut control_type: String = "".to_string();
-            if let Ok(ctrl_type) = ui_elem_props.element.get_control_type() {
-                control_type = ctrl_type.to_string();
-            }
-            // let ctrl_type = ui_elem_props.element.get_control_type().unwrap();
-            let control_type_localized = ui_elem_props
-                .element
-                .get_localized_control_type()
-                .unwrap_or("".to_string());
+            let control_type = ui_elem_props.get_control_type();
+            let control_type_localized = ui_elem_props.get_localized_control_type();
+            let name = ui_elem_props.get_name();
+            let class_name = ui_elem_props.get_classname();
+            let automation_id = ui_elem_props.get_automation_id();
 
-            let name = ui_elem_props.element.get_name().unwrap_or("".to_string());
-            let class_name = ui_elem_props
-                .element
-                .get_classname()
-                .unwrap_or("".to_string());
-            let automation_id = ui_elem_props
-                .element
-                .get_automation_id()
-                .unwrap_or("".to_string());
-
-            let bounding_rect: uiautomation::types::Rect = ui_elem_props
-                .element
-                .get_bounding_rectangle()
-                .unwrap_or(uiautomation::types::Rect::new(0, 0, 0, 0));
+            let bounding_rect = ui_elem_props.get_bounding_rectangle();
             let left = bounding_rect.get_left();
             let top = bounding_rect.get_top();
             let right = bounding_rect.get_right();
@@ -120,121 +99,11 @@ impl UITree {
             let width = right - left;
             let height = bottom - top;
 
-            let runtime_id = ui_elem_props
-                .element
-                .get_runtime_id()
-                .unwrap_or_default()
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<String>>()
-                .join(".");
+            let runtime_id = format_runtime_id_dotted(ui_elem_props.get_runtime_id());
             path.push(format!("/{}[LocalizedControlType=\"{}\"][ClassName=\"{}\"][Name=\"{}\"][AutomationId=\"{}\"][x={}][y={}][width={}][height={}][lx={}][ly={}][position()={}][RuntimeId=\"{}\"]\n", control_type, control_type_localized, class_name, name, automation_id, left, top, width, height, left, top, "", runtime_id));
-            // path.push(format!("/{}[LocalizedControlType=\"{}\"][ClassName=\"{}\"][Name=\"{}\"][AutomationId=\"{}\"][x={}][y={}][width={}][height={}][lx={}][ly={}][position()={}]\n", ctrl_type, ctrl_type_localized, class_name, name, automation_id, left, top, width, height, left, top, ""));
         }
 
-        // path.reverse();
         path.join("").to_string()
-    }
-}
-
-// #[derive(Debug, Clone)]
-// pub struct UIElementProps {
-//     pub name: String,
-//     pub classname: String,
-//     pub control_type: String,
-//     pub localized_control_type: String,
-//     pub framework_id: String,
-//     pub runtime_id: Vec<i32>,
-//     pub automation_id: String,
-//     pub handle: isize,
-//     pub bounding_rect: uiautomation::types::Rect,
-//     pub bounding_rect_size: i32,
-//     pub level: usize,
-//     pub z_order: usize,
-// }
-
-// impl UIElementProps {
-//     pub fn new(from_element: UIElement, level: usize, z_order: usize) -> Self {
-//         let mut elem = UIElementProps::from(from_element);
-//         elem.z_order = z_order;
-//         elem.level = level;
-//         elem
-//     }
-// }
-
-// impl From<UIElement> for UIElementProps {
-//     fn from(item: UIElement) -> Self {
-
-//         let name: String = item.get_name().unwrap_or("".to_string());
-//         let classname: String = item.get_classname().unwrap_or("".to_string());
-
-//         let mut control_type: String = "".to_string();
-//         if let Ok(ctrl_type) =  item.get_control_type() {
-//             control_type = ctrl_type.to_string();
-//         }
-
-//         let localized_control_type: String = item.get_localized_control_type().unwrap_or("".to_string());
-//         let framework_id: String = item.get_framework_id().unwrap_or("".to_string());
-//         let runtime_id: Vec<i32> = item.get_runtime_id().unwrap_or(Vec::new());
-//         let automation_id: String = item.get_automation_id().unwrap_or("".to_string());
-//         let handle : isize = item.get_native_window_handle().unwrap_or(Handle::from(0 as isize)).into();
-//         let bounding_rect: uiautomation::types::Rect = item.get_bounding_rectangle().unwrap_or(uiautomation::types::Rect::new(0, 0, 0, 0));
-//         let bounding_rect_size: i32 = (bounding_rect.get_right() - bounding_rect.get_left()) * (bounding_rect.get_bottom() - bounding_rect.get_top());
-
-//         UIElementProps {
-//             name,
-//             classname,
-//             control_type,
-//             localized_control_type,
-//             framework_id,
-//             runtime_id,
-//             automation_id,
-//             handle,
-//             bounding_rect,
-//             bounding_rect_size,
-//             level: 0,
-//             z_order: 0,
-//         }
-//     }
-// }
-
-#[derive(Debug, Clone)]
-pub struct SaveUIElement {
-    pub element: UIElement,
-    pub bounding_rect_size: i32,
-    pub level: usize,
-    pub z_order: usize,
-}
-
-// SAFETY: UIElement wraps COM interface pointers. Implementing Send is safe because:
-// - UIAutomation::new() initializes COM with COINIT_MULTITHREADED (MTA)
-// - In MTA, COM objects can be moved to and called from any thread
-// - All thread-spawning code creates elements within an MTA context
-// - If UIAutomation::new_direct() is used (bypasses COM init), the caller must
-//   ensure COM is initialized as MTA before passing elements across threads
-//
-// Note: Sync is intentionally NOT implemented. COM interface pointers should not be
-// accessed concurrently from multiple threads without external synchronization.
-// All cross-thread usage in this codebase moves (Send) elements rather than sharing them.
-unsafe impl Send for SaveUIElement {}
-
-impl SaveUIElement {
-    pub fn new(element: UIElement, level: usize, z_order: usize) -> Self {
-        let bounding_rect: uiautomation::types::Rect = element
-            .get_bounding_rectangle()
-            .unwrap_or(uiautomation::types::Rect::new(0, 0, 0, 0));
-        let bounding_rect_size: i32 = (bounding_rect.get_right() - bounding_rect.get_left())
-            * (bounding_rect.get_bottom() - bounding_rect.get_top());
-        SaveUIElement {
-            element,
-            bounding_rect_size,
-            level,
-            z_order,
-        }
-    }
-
-    pub fn get_element(&self) -> &UIElement {
-        &self.element
     }
 }
 
@@ -246,7 +115,6 @@ pub fn get_all_elements(tx: Sender<Result<UITree, UITreeError>>, max_depth: Opti
             return;
         }
     };
-    // control view walker
     let walker = match automation.get_control_view_walker() {
         Ok(w) => w,
         Err(e) => {
@@ -255,10 +123,8 @@ pub fn get_all_elements(tx: Sender<Result<UITree, UITreeError>>, max_depth: Opti
         }
     };
 
-    // allocate a new ui elements vector with a capacity of 10000 elements
     let mut ui_elements: Vec<UIElementInTree> = Vec::with_capacity(10000);
 
-    // get the desktop and all UI elements below the desktop
     let root = match automation.get_root_element() {
         Ok(e) => e,
         Err(e) => {
@@ -266,23 +132,21 @@ pub fn get_all_elements(tx: Sender<Result<UITree, UITreeError>>, max_depth: Opti
             return;
         }
     };
-    let runtime_id = format_runtime_id(&root.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]));
+    let ui_elem_props = SaveUIElement::new(&root, 0, 999);
+    let runtime_id = format_runtime_id(ui_elem_props.get_runtime_id());
     let item = format!(
         "'{}' {} ({} | {} | {})",
-        root.get_name().unwrap_or_default(),
-        root.get_localized_control_type().unwrap_or_default(),
-        root.get_classname().unwrap_or_default(),
-        root.get_framework_id().unwrap_or_default(),
+        ui_elem_props.get_name(),
+        ui_elem_props.get_localized_control_type(),
+        ui_elem_props.get_classname(),
+        ui_elem_props.get_framework_id(),
         runtime_id
     );
-    let ui_elem_props = SaveUIElement::new(root.clone(), 0, 999);
-    let mut tree = UITreeMap::new(item, runtime_id.clone(), ui_elem_props.clone());
+    let mut tree = UITreeMap::new(item, runtime_id.clone(), ());
     let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, 0);
-    // let mut ui_elements: Vec<UIElementInTree> = vec![ui_elem_in_tree];
     ui_elements.push(ui_elem_in_tree);
 
     if let Ok(_first_child) = walker.get_first_child(&root) {
-        // itarate over all child ui elements
         get_element(
             &mut tree,
             &mut ui_elements,
@@ -292,26 +156,23 @@ pub fn get_all_elements(tx: Sender<Result<UITree, UITreeError>>, max_depth: Opti
             0,
             0,
             max_depth,
-        ); //xml_root,
+        );
     }
 
-    // sorting the elements by z_order first, then by ascending bounding rect size within each z-order
     printfmt!("Sorting UI elements by z-order and size...");
-    ui_elements.sort_by(|a, b| {
+    ui_elements.sort_unstable_by(|a, b| {
         a.get_element_props()
-            .z_order
-            .cmp(&b.get_element_props().z_order)
+            .get_z_order()
+            .cmp(&b.get_element_props().get_z_order())
             .then(
                 a.get_element_props()
-                    .bounding_rect_size
-                    .cmp(&b.get_element_props().bounding_rect_size),
+                    .get_bounding_rect_size()
+                    .cmp(&b.get_element_props().get_bounding_rect_size()),
             )
     });
 
-    // pack the tree and ui_elements vector into a single struct
     let ui_tree = UITree::new(tree, ui_elements);
 
-    // send the tree containing all UI elements back to the main thread
     printfmt!(
         "Sending UI tree with {} elements to the main thread...",
         ui_tree.get_elements().len()
@@ -323,7 +184,7 @@ pub fn get_all_elements(tx: Sender<Result<UITree, UITreeError>>, max_depth: Opti
 
 #[allow(clippy::too_many_arguments)]
 fn get_element(
-    tree: &mut UITreeMap<SaveUIElement>,
+    tree: &mut UITreeMap<()>,
     ui_elements: &mut Vec<UIElementInTree>,
     parent: usize,
     walker: &UITreeWalker,
@@ -338,38 +199,23 @@ fn get_element(
         return;
     }
 
-    let runtime_id = format_runtime_id(&element.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]));
+    let effective_z_order = if level == 0 { 999 } else { z_order };
+    let ui_elem_props = SaveUIElement::new(element, level, effective_z_order);
+    let runtime_id = format_runtime_id(ui_elem_props.get_runtime_id());
     let item = format!(
         "'{}' {} ({} | {} | {})",
-        element.get_name().unwrap_or_default(),
-        element.get_localized_control_type().unwrap_or_default(),
-        element.get_classname().unwrap_or_default(),
-        element.get_framework_id().unwrap_or_default(),
+        ui_elem_props.get_name(),
+        ui_elem_props.get_localized_control_type(),
+        ui_elem_props.get_classname(),
+        ui_elem_props.get_framework_id(),
         runtime_id
     );
-    let ui_elem_props = if level == 0 {
-        SaveUIElement::new(element.clone(), level, 999)
-    } else {
-        SaveUIElement::new(element.clone(), level, z_order)
-    };
 
-    let parent = tree.add_child(
-        parent,
-        item.as_str(),
-        runtime_id.as_str(),
-        ui_elem_props.clone(),
-    );
+    let parent = tree.add_child(parent, item.as_str(), runtime_id.as_str(), ());
     let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, parent);
     ui_elements.push(ui_elem_in_tree);
-    // pass through the XML DOM node to avoid computation of the XML DOM tree during performance testing
-    // let curr_xml_dom_node = xml_dom_node;
-    // let curr_xml_dom_node = xml_dom_node.add_child(XMLDomNode::new(element.get_classname().unwrap().as_str()));
-    // curr_xml_dom_node.set_attribute("Name", element.get_name().unwrap_or("No name defined".to_string()).as_str());
 
-    // Walking the children of the current element
     if let Ok(child) = walker.get_first_child(element) {
-        // getting child elements
-        // printfmt!("Found child element: {}", child.get_name().unwrap_or("Unknown".to_string()));
         get_element(
             tree,
             ui_elements,
@@ -379,15 +225,12 @@ fn get_element(
             level + 1,
             z_order,
             max_depth,
-        ); // curr_xml_dom_node,
+        );
         let mut next = child;
-        // walking siblings
         while let Ok(sibling) = walker.get_next_sibling(&next) {
-            // incrementing z_order for each sibling
             if level + 1 == 1 {
                 z_order += 1;
             }
-            // printfmt!("Found sibling element: {}", sibling.get_name().unwrap_or("Unknown".to_string()));
             get_element(
                 tree,
                 ui_elements,
@@ -397,113 +240,8 @@ fn get_element(
                 level + 1,
                 z_order,
                 max_depth,
-            ); // curr_xml_dom_node,
+            );
             next = sibling;
         }
     }
-}
-
-// Function that tries to match the original C++ XPath format
-fn match_original_format(xpath: &str) -> String {
-    let lines: Vec<&str> = xpath.split('\n').filter(|line| !line.is_empty()).collect();
-    let mut elements = Vec::new();
-    let mut tag: &str;
-
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-
-        // Extract the tag name (everything before the first '[')
-        let tag_end = line.find('[').unwrap_or(line.len());
-        if tag_end == 0 || !line.starts_with('/') {
-            printfmt!("Skipping malformed line: {}", line);
-            continue; // Skip lines that don't start with '/' or are malformed
-        }
-
-        // Skip the leading '/', i.e. the 1st character - handle UTF-8 characters (i.e. char boundaries) correctly
-        // let tag = &line[1..tag_end]; //
-        let tag_extracted = line.chars().next().map(|c| &line[c.len_utf8()..tag_end]);
-        match tag_extracted {
-            None => {
-                printfmt!("Skipping malformed line: {}", line);
-                continue; // Skip lines that don't have a valid tag
-            }
-            Some(tag_content) => {
-                // leak the tag content outside the match scope to avoid lifetime issues
-                tag = tag_content;
-            }
-        }
-
-        // once we reached here, we have a valid tag and can start building the XPath element
-        let mut element = format!("/{}", tag);
-
-        // Helper function to extract attribute value and format it with escaped quotes
-        let extract_attr = |attr_name: &str, line: &str| -> Option<String> {
-            let attr_prefix = format!("[{}=\"", attr_name);
-            if let Some(start_idx) = line.find(&attr_prefix) {
-                let value_start = start_idx + attr_prefix.len();
-                if let Some(end_idx) = line[value_start..].find("\"]") {
-                    let value = &line[value_start..value_start + end_idx];
-                    // Skip empty attributes
-                    if value.is_empty() {
-                        return None;
-                    }
-                    return Some(format!("[@{}=\\\"{}\\\"]", attr_name, value));
-                }
-            }
-            None
-        };
-
-        // Helper function to get just the attribute value
-        let get_attr_value = |attr_name: &str, line: &str| -> Option<String> {
-            let attr_prefix = format!("[{}=\"", attr_name);
-            if let Some(start_idx) = line.find(&attr_prefix) {
-                let value_start = start_idx + attr_prefix.len();
-                if let Some(end_idx) = line[value_start..].find("\"]") {
-                    let value = &line[value_start..value_start + end_idx];
-                    if !value.is_empty() {
-                        return Some(value.to_string());
-                    }
-                }
-            }
-            None
-        };
-
-        // More complex logic to match original C++ behavior
-        if tag == "Pane" || tag == "Window" {
-            // Always include ClassName for Pane and Window
-            if let Some(class_attr) = extract_attr("ClassName", line) {
-                element.push_str(&class_attr);
-            }
-        } else if tag == "Group" {
-            // For Group, only include ClassName if it's "LandmarkTarget"
-            if let Some(class_value) = get_attr_value("ClassName", line)
-                && class_value == "LandmarkTarget"
-                && let Some(class_attr) = extract_attr("ClassName", line)
-            {
-                element.push_str(&class_attr);
-            }
-            // Skip ClassName for Group elements with other classes like "NamedContainerAutomationPeer"
-        }
-        // For other elements like Button and Custom, don't include ClassName
-
-        // Add Name attribute (if non-empty)
-        if let Some(name_attr) = extract_attr("Name", line) {
-            element.push_str(&name_attr);
-        }
-
-        // Add AutomationId attribute (if non-empty)
-        if let Some(id_attr) = extract_attr("AutomationId", line) {
-            element.push_str(&id_attr);
-        }
-
-        elements.push(element);
-    }
-
-    // Reverse the elements to go from root to specific element
-    // elements.reverse();
-
-    // Join all elements into a single XPath string
-    elements.join("")
 }

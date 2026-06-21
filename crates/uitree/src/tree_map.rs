@@ -1,7 +1,6 @@
 //! A generic tree structure with fast key-value lookup.
-#![allow(dead_code)]
 
-use crate::{UIHashMap, UIHashSet};
+use crate::UIHashMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TreeMapError {
@@ -88,7 +87,7 @@ impl<T> UITreeMap<T> {
         index < self.nodes.len()
     }
 
-    pub fn nodes(&self) -> &Vec<UITreeNode<T>> {
+    pub fn nodes(&self) -> &[UITreeNode<T>] {
         &self.nodes
     }
 
@@ -198,54 +197,50 @@ impl<T> UITreeMap<T> {
             .map(|idx| self.node(*idx))
     }
 
-    /// Walks the tree and calls the callback on each node's data, immutably
+    /// Walks the tree and calls the callback on each node's data, immutably.
     pub fn for_each<F>(&self, mut callback: F)
     where
         F: FnMut(usize, &T),
     {
-        let mut visited = UIHashSet::new();
-        self.for_each_recursive(self.root(), &mut callback, &mut visited);
+        self.for_each_recursive(self.root(), &mut callback, 0);
     }
 
-    /// Internal helper for recursive traversal.
-    fn for_each_recursive<F>(&self, index: usize, callback: &mut F, visited: &mut UIHashSet<usize>)
+    fn for_each_recursive<F>(&self, index: usize, callback: &mut F, depth: usize)
     where
         F: FnMut(usize, &T),
     {
-        if visited.contains(&index) {
-            return; // Prevent cycles
+        debug_assert!(depth <= self.nodes.len(), "cycle detected in UITreeMap");
+        if depth > self.nodes.len() {
+            return;
         }
-        visited.insert(index);
 
         let node = &self.nodes[index];
         callback(index, &node.data);
 
         for &child in &node.children {
-            self.for_each_recursive(child, callback, visited);
+            self.for_each_recursive(child, callback, depth + 1);
         }
     }
 
-    pub fn debug_tree_map<F>(
-        &self,
-        index: usize,
-        indent: usize,
-        display: &F,
-        visited: &mut UIHashSet<usize>,
-    ) where
+    pub fn debug_tree_map<F>(&self, index: usize, indent: usize, display: &F, depth: usize)
+    where
         F: Fn(&T) -> String,
     {
-        if visited.contains(&index) {
-            println!("{}(Cycle detected at node {})", " ".repeat(indent), index);
+        if depth > self.nodes.len() {
+            println!(
+                "{}(Max depth exceeded at node {})",
+                " ".repeat(indent),
+                index
+            );
             return;
         }
-        visited.insert(index);
 
         let node = &self.nodes[index];
         let prefix = " ".repeat(indent);
         println!("{}{}: {}", prefix, &node.name, display(&node.data));
 
         for &child in &node.children {
-            self.debug_tree_map(child, indent + 2, display, visited);
+            self.debug_tree_map(child, indent + 2, display, depth + 1);
         }
     }
 
@@ -253,8 +248,7 @@ impl<T> UITreeMap<T> {
     where
         F: Fn(&T) -> String,
     {
-        let mut visited = UIHashSet::default();
-        self.debug_fmt_node_with(f, self.root(), 0, display, &mut visited)
+        self.debug_fmt_node_with(f, self.root(), 0, display, 0)
     }
 
     fn debug_fmt_node_with<F>(
@@ -263,108 +257,30 @@ impl<T> UITreeMap<T> {
         index: usize,
         indent: usize,
         display: &F,
-        visited: &mut UIHashSet<usize>,
+        depth: usize,
     ) -> std::fmt::Result
     where
         F: Fn(&T) -> String,
     {
-        if visited.contains(&index) {
+        if depth > self.nodes.len() {
             writeln!(
                 f,
-                "{}(Cycle detected at node {})",
+                "{}(Max depth exceeded at node {})",
                 " ".repeat(indent),
                 index
             )?;
             return Ok(());
         }
-        visited.insert(index);
 
         let node = &self.nodes[index];
         let prefix = " ".repeat(indent);
         writeln!(f, "{}{}: {}", prefix, node.name, display(&node.data))?;
 
         for &child in &node.children {
-            self.debug_fmt_node_with(f, child, indent + 2, display, visited)?;
+            self.debug_fmt_node_with(f, child, indent + 2, display, depth + 1)?;
         }
 
         Ok(())
-    }
-}
-
-pub trait UITree {
-    type Data;
-
-    fn tree_mut(&mut self) -> &mut UITreeMap<Self::Data>;
-    fn tree(&self) -> &UITreeMap<Self::Data>;
-
-    fn root(&self) -> usize {
-        0
-    }
-
-    fn add_child<'a>(
-        &'a mut self,
-        parent: usize,
-        name: &str,
-        rt_id: &str,
-        data: Self::Data,
-    ) -> UITreeCursor<'a, Self::Data> {
-        let child_index = self.tree_mut().add_child(parent, name, rt_id, data);
-        UITreeCursor {
-            tree: self.tree_mut(),
-            parent_index: parent,
-            current_index: child_index,
-        }
-    }
-
-    fn debug_tree(&self, display: impl Fn(&Self::Data) -> String) {
-        let mut visited = UIHashSet::new();
-        self.tree()
-            .debug_tree_map(self.root(), 0, &display, &mut visited);
-    }
-}
-
-// Cursor for chaining child and sibling additions
-pub struct UITreeCursor<'a, T> {
-    tree: &'a mut UITreeMap<T>,
-    parent_index: usize,
-    current_index: usize,
-}
-
-impl<'a, T: Default> UITreeCursor<'a, T> {
-    pub fn new(tree: &'a mut UITreeMap<T>, parent_index: usize, current_index: usize) -> Self {
-        Self {
-            tree,
-            parent_index,
-            current_index,
-        }
-    }
-
-    /// Add a child to the current node.
-    pub fn add_child(mut self, name: &str, rt_id: &str, data: T) -> Self {
-        let child_index = self.tree.add_child(self.current_index, name, rt_id, data);
-        self.parent_index = self.current_index;
-        self.current_index = child_index;
-        self
-    }
-
-    /// Add a sibling to the current node.
-    pub fn add_sibling(mut self, name: &str, rt_id: &str, data: T) -> Self {
-        let sibling_index = self.tree.add_child(self.parent_index, name, rt_id, data);
-        self.current_index = sibling_index;
-        self
-    }
-
-    /// Return the parent node of this node.
-    pub fn up(mut self) -> Self {
-        let parent_node = self.tree.node(self.parent_index);
-        self.parent_index = parent_node.parent;
-        self.current_index = parent_node.index;
-        self
-    }
-
-    /// Return the index of the current node.
-    pub fn index(&self) -> usize {
-        self.current_index
     }
 }
 
@@ -494,22 +410,6 @@ mod tests {
         assert!(visited.contains(&1));
         assert!(visited.contains(&2));
         assert!(visited.contains(&3));
-    }
-
-    #[test]
-    fn test_cursor_add_child_and_sibling() {
-        let mut tree = UITreeMap::new("Root".into(), "rt-root".into(), String::new());
-        let cursor = UITreeCursor::new(&mut tree, 0, 0);
-        let final_cursor = cursor
-            .add_child("A", "rt-a", "a".into())
-            .add_sibling("B", "rt-b", "b".into())
-            .add_child("C", "rt-c", "c".into());
-        let c_idx = final_cursor.index();
-
-        assert_eq!(tree.node(c_idx).name, "C");
-        assert_eq!(tree.node(c_idx).parent, 2);
-        assert_eq!(tree.node(2).name, "B");
-        assert_eq!(tree.children(0), &[1, 2]);
     }
 
     #[test]

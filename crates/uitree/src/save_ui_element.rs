@@ -22,11 +22,44 @@ pub struct SaveUIElement {
 }
 
 impl SaveUIElement {
-    pub fn new(from_element: UIElement, level: usize, z_order: usize) -> Self {
-        let mut elem = SaveUIElement::from(from_element);
-        elem.z_order = z_order;
-        elem.level = level;
-        elem
+    /// Construct a `SaveUIElement` by extracting all properties from a `UIElement`
+    /// reference. The `UIElement` is borrowed — no COM `AddRef`/`Release` is needed.
+    pub fn new(element: &UIElement, level: usize, z_order: usize) -> Self {
+        let name = element.get_name().unwrap_or_default();
+        let classname = element.get_classname().unwrap_or_default();
+        let control_type = element
+            .get_control_type()
+            .map(|ct| ct.to_string())
+            .unwrap_or_default();
+        let localized_control_type = element.get_localized_control_type().unwrap_or_default();
+        let framework_id = element.get_framework_id().unwrap_or_default();
+        let runtime_id = element.get_runtime_id().unwrap_or_default();
+        let automation_id = element.get_automation_id().unwrap_or_default();
+        let handle: isize = element
+            .get_native_window_handle()
+            .unwrap_or(Handle::from(0_isize))
+            .into();
+        let bounding_rect = element
+            .get_bounding_rectangle()
+            .unwrap_or(uiautomation::types::Rect::new(0, 0, 0, 0));
+        let bounding_rect_size = (bounding_rect.get_right() - bounding_rect.get_left())
+            * (bounding_rect.get_bottom() - bounding_rect.get_top());
+
+        SaveUIElement {
+            name,
+            classname,
+            control_type,
+            localized_control_type,
+            framework_id,
+            runtime_id,
+            automation_id,
+            handle,
+            bounding_rect,
+            bounding_rect_size,
+            level,
+            z_order,
+            xpath: None,
+        }
     }
 
     pub fn get_name(&self) -> &String {
@@ -44,7 +77,7 @@ impl SaveUIElement {
     pub fn get_framework_id(&self) -> &String {
         &self.framework_id
     }
-    pub fn get_runtime_id(&self) -> &Vec<i32> {
+    pub fn get_runtime_id(&self) -> &[i32] {
         &self.runtime_id
     }
     pub fn get_automation_id(&self) -> &String {
@@ -182,51 +215,6 @@ impl Default for SaveUIElement {
             level: 0,
             z_order: 0,
             xpath: None,
-        }
-    }
-}
-
-impl From<UIElement> for SaveUIElement {
-    fn from(item: UIElement) -> Self {
-        let name: String = item.get_name().unwrap_or("".to_string());
-        let classname: String = item.get_classname().unwrap_or("".to_string());
-
-        let mut control_type: String = "".to_string();
-        if let Ok(ctrl_type) = item.get_control_type() {
-            control_type = ctrl_type.to_string();
-        }
-
-        let localized_control_type: String =
-            item.get_localized_control_type().unwrap_or("".to_string());
-        let framework_id: String = item.get_framework_id().unwrap_or("".to_string());
-        let runtime_id: Vec<i32> = item.get_runtime_id().unwrap_or_default();
-        let automation_id: String = item.get_automation_id().unwrap_or("".to_string());
-        let handle: isize = item
-            .get_native_window_handle()
-            .unwrap_or(Handle::from(0_isize))
-            .into();
-        let bounding_rect: uiautomation::types::Rect = item
-            .get_bounding_rectangle()
-            .unwrap_or(uiautomation::types::Rect::new(0, 0, 0, 0));
-        let bounding_rect_size: i32 = (bounding_rect.get_right() - bounding_rect.get_left())
-            * (bounding_rect.get_bottom() - bounding_rect.get_top());
-        // let element = Mutex::new(None);
-
-        SaveUIElement {
-            name,
-            classname,
-            control_type,
-            localized_control_type,
-            framework_id,
-            runtime_id,
-            automation_id,
-            handle,
-            bounding_rect,
-            bounding_rect_size,
-            level: 0,
-            z_order: 0,
-            xpath: None,
-            // element,
         }
     }
 }

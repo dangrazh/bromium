@@ -13,3 +13,4 @@ xmlutil = { path = "../xmlutil" }
 
 xot.workspace = true
 thiserror = "2.0"
+quick-xml = "0.38.0"

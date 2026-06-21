@@ -1,759 +1,647 @@
-from typing import Tuple, Optional, Literal
-# This is a stub file for the bromium module, which provides a Windows driver for the MS Windows operating system.
-class Bromium:
+"""
+Type stubs for the bromium module.
+
+bromium is a Python library for Windows UI Automation built on Rust + PyO3.
+It provides programmatic access to UI elements via the Windows UI Automation API.
+"""
+
+from typing import Iterator, Literal, Optional
+
+# ─── Exceptions ───────────────────────────────────────────────────────────────
+
+class ElementNotFoundError(Exception):
+    """Raised when a UI element cannot be located (by xpath, coordinates, or runtime ID)."""
+    ...
+
+class AutomationError(Exception):
+    """Raised when a UI Automation operation fails (click, send_keys, set_value, etc.)."""
+    ...
+
+class TreeConstructionError(TimeoutError):
+    """Raised when the UI tree cannot be built or refreshed (COM failures, channel timeouts)."""
+    ...
+
+# ─── Enums ────────────────────────────────────────────────────────────────────
+
+class LogLevel:
+    """Log level enumeration for controlling logging verbosity."""
+    Error: LogLevel
+    Warn: LogLevel
+    Info: LogLevel
+    Debug: LogLevel
+    Trace: LogLevel
+    Off: LogLevel
+
+# ─── Module-level functions ───────────────────────────────────────────────────
+
+def init_logging(
+    log_path: Optional[str] = None,
+    log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]] = None,
+    enable_console: Optional[bool] = None,
+    enable_file: Optional[bool] = None,
+) -> None:
     """
-    A class representing the Bromium module.
-    
-    Methods:
-    - init_logging() -> None: Initializes the logging system for the Bromium module.
+    Initialize the bromium logging system.
+
+    Args:
+        log_path: Directory for log files. Defaults to ~/.bromium.
+        log_level: One of "Off","Error","Warn","Info","Debug","Trace". Defaults to "Info".
+        enable_console: Enable console output. Defaults to False.
+        enable_file: Enable file output. Defaults to True.
     """
-    
-    @staticmethod
-    def init_logging(log_path: Optional[str], log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]], enable_console: Optional[bool], enable_file: Optional[bool]) -> None:
-        """
-        Initializes the logging system for the Bromium module.
-        
-        This method sets up the logging configuration and prepares the logging system
-        to capture log messages from the Bromium module.
-        """
-        pass
-    
-    @staticmethod
-    def get_win_driver(timeout_ms: int, window_title: Optional[str]) -> 'WinDriver':
-        """
-        Returns a WinDriver instance with the specified timeout, filtering by window title if provided.
-        
-        Parameters:
-        - timeout_ms (int): The timeout value in milliseconds for UI operations.
-        - window_title (Optional[str]): The window title to filter by. If None, no filter is applied.
-        
-        Returns:
-        - WinDriver: An instance of the WinDriver class.
-        """
-        pass
+    ...
 
-    @staticmethod
-    def get_version() -> str:
-        """
-        Get the current Bromium module version.
-        
-        Returns:
-        - str: The current Bromium module version
-        """
-        pass
-    
-    @staticmethod
-    def get_log_file() -> str:
-        """
-        Get the current log file path. Returns default path if not set.
-        
-        Returns:
-        - str: The current log file path
-        """
-        pass
+def get_version() -> str:
+    """Get the current bromium version string."""
+    ...
 
-    @staticmethod
-    def set_log_file(path: str) -> None:
-        """
-        Set the full path for the log file. Creates parent directories if needed.
-        
-        Parameters:
-        - path (str): Full path to the log file
-        
-        Example:
-            import bromium
-            bromium.set_log_file("D:/my_logs/bromium_custom.log")
-        """
-        pass
+def get_log_file() -> str:
+    """Get the current log file path. Returns default path if not set."""
+    ...
 
-    @staticmethod
-    def set_log_directory(dir_path: str) -> None:
-        """
-        Set a custom directory for log files. A timestamped log file will be created in this directory.
-        
-        Parameters:
-        - dir_path (str): Directory path where log files should be created
-        
-        Example:
-            import bromium
-            bromium.set_log_directory("D:/my_custom_logs")
-        """
-        pass
+def set_log_file(log_file: str) -> None:
+    """
+    Set the full path for the log file. Creates parent directories if needed.
 
-    @staticmethod
-    def set_log_level(level: Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]) -> None:
-        """
-        Set the logging level for the bromium module.
-        
-        Parameters:
-        - level (Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]): The desired log level
-        
-        Example:
-            import bromium
-            bromium.set_log_level("Info")
-        """
-        pass
+    Args:
+        log_file: Full path to the log file.
+    """
+    ...
 
-    @staticmethod
-    def get_log_level() -> str:
-        """
-        Get the current logging level.
-        
-        Returns:
-        - str: The current log level as a string
-        """
-        pass
+def get_log_level() -> str:
+    """Get the current logging level as a string."""
+    ...
 
-    @staticmethod
-    def enable_console_logging(enable: bool) -> None:
-        """
-        Enable or disable console logging.
-        
-        Parameters:
-        - enable (bool): True to enable console logging, False to disable it.
-        """
-        pass
+def set_log_level(log_level: Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]) -> None:
+    """
+    Set the logging level.
 
-    @staticmethod
-    def enable_file_logging(enable: bool) -> None:
-        """
-        Enable or disable file logging.
-        
-        Parameters:
-        - enable (bool): True to enable file logging, False to disable it.
-        """
-        pass
+    Args:
+        log_level: The desired log level.
+    """
+    ...
 
-    @staticmethod
-    def reset_log_file() -> None:
-        """
-        Clear all contents from the current log file.
-        """
-        pass
+def set_log_directory(log_directory: str) -> None:
+    """
+    Set a custom directory for log files. A timestamped log file will be created.
+
+    Args:
+        log_directory: Directory path where log files should be created.
+    """
+    ...
+
+def enable_console_logging(enable: bool) -> None:
+    """Enable or disable console logging."""
+    ...
+
+def enable_file_logging(enable: bool) -> None:
+    """Enable or disable file logging."""
+    ...
+
+def reset_log_file() -> None:
+    """Clear all contents from the current log file."""
+    ...
+
+# ─── Element ──────────────────────────────────────────────────────────────────
 
 class Element:
     """
-    A class representing a UI element in the Windows UI Automation API.
-    
-    Attributes:
-    - name (str): The name of the UI element.
-    - xpath (str): The XPath locator for the UI element.
-    - handle (int): The window handle of the UI element.
-    - runtime_id (list[int]): The runtime ID of the UI element.
-    - bounding_rectangle (tuple[int, int, int, int]): The bounding rectangle coordinates (left, top, right, bottom).
-    
-    Methods:
-    - __repr__(self) -> str: Returns a string representation of the Element instance.
-    - __str__(self) -> str: Returns the name of the element.
-    - get_name(self) -> str: Returns the name of the UI element.
-    - get_xpath(self) -> str: Returns the XPath locator of the UI element.
-    - get_handle(self) -> int: Returns the window handle of the UI element.
-    - get_runtime_id(self) -> list[int]: Returns the runtime ID of the UI element.
-    - send_click(self) -> None: Sends a mouse click to the element.
-    - send_double_click(self) -> None: Sends a double click to the element.
-    - send_right_click(self) -> None: Sends a right click to the element.
-    - hold_click(self, holdkeys: str) -> None: Performs a click while holding specified keys.
-    - send_keys(self, keys: str) -> None: Sends keyboard input to the element.
-    - send_text(self, text: str) -> None: Sends text input to the element.
-    - hold_send_keys(self, holdkeys: str, keys: str, interval: int) -> None: Sends keys while holding modifier keys.
-    - show_context_menu(self) -> None: Shows the context menu for the element.
+    A UI element discovered via the Windows UI Automation API.
+
+    Properties provide read-only access to element metadata.
+    Methods perform actions on the element (click, type, etc.).
     """
-    
-    def __init__(self, name: str, xpath: str, handle: int, runtime_id: list[int], bounding_rectangle: tuple[int, int, int, int]) -> None:
-        """
-        Initializes the Element instance.
-        
-        Parameters:
-        - name (str): The name of the UI element.
-        - xpath (str): The XPath locator for the UI element.
-        - handle (int): The window handle of the UI element.
-        - runtime_id (list[int]): The runtime ID of the UI element.
-        - bounding_rectangle (tuple[int, int, int, int]): The bounding rectangle coordinates (left, top, right, bottom).
-        """
-        pass  # Implementation not provided in the stub
 
-    def __repr__(self) -> str:
-        """
-        Returns a string representation of the Element instance.
-        
-        Returns:
-        - str: A string representation of the Element instance.
-        """
-        pass
+    def __init__(
+        self,
+        name: str,
+        xpath: str,
+        handle: int,
+        control_type: str,
+        runtime_id: list[int],
+        bounding_rectangle: tuple[int, int, int, int],
+    ) -> None: ...
 
-    def __str__(self) -> str:
-        """
-        Returns the name of the element.
-        
-        Returns:
-        - str: The name of the element.
-        """
-        pass
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
 
-    def get_name(self) -> str:
-        """
-        Returns the name of the UI element.
-        
-        Returns:
-        - str: The name of the UI element.
-        """
-        pass
+    # ─── Properties ───────────────────────────────────────────────────────
 
-    def get_xpath(self) -> str:
-        """
-        Returns the XPath locator of the UI element.
-        
-        Returns:
-        - str: The XPath locator of the UI element.
-        """
-        pass
+    @property
+    def name(self) -> str:
+        """The name of the UI element."""
+        ...
 
-    def get_handle(self) -> int:
-        """
-        Returns the window handle of the UI element.
-        
-        Returns:
-        - int: The window handle of the UI element.
-        """
-        pass
+    @property
+    def xpath(self) -> str:
+        """The XPath locator for this element within the UI tree."""
+        ...
 
-    def get_control_type(self) -> str:
-        """
-        Returns the control type of the UI element.
+    @property
+    def handle(self) -> int:
+        """The native window handle (HWND) of this element."""
+        ...
 
-        Returns:
-        - str: The control type of the UI element.       
-        """
-        pass
+    @property
+    def control_type(self) -> str:
+        """The UI Automation control type (e.g. "Button", "Edit", "Window")."""
+        ...
 
+    @property
+    def runtime_id(self) -> list[int]:
+        """The runtime ID uniquely identifying this element in the current session."""
+        ...
 
-    def get_runtime_id(self) -> list[int]:
-        """
-        Returns the runtime ID of the UI element.
-        
-        Returns:
-        - list[int]: The runtime ID of the UI element.
-        """
-        pass
+    @property
+    def bounding_rectangle(self) -> tuple[int, int, int, int]:
+        """The bounding rectangle as (left, top, right, bottom)."""
+        ...
+
+    # ─── Actions ──────────────────────────────────────────────────────────
 
     def send_click(self) -> None:
         """
-        Sends a mouse click to the element.
-        
+        Send a click to the element.
+
+        Uses the Invoke pattern if supported, otherwise falls back to
+        a coordinate-based mouse click at the element center.
+
         Raises:
-        - ValueError: If the element cannot be found or the click action fails.
+            ElementNotFoundError: If the element cannot be located.
+            AutomationError: If the click action fails.
         """
-        pass
+        ...
 
     def send_double_click(self) -> None:
         """
-        Sends a double click to the element.
-        
+        Send a double-click to the element center.
+
         Raises:
-        - ValueError: If the element cannot be found or the double click action fails.
+            ElementNotFoundError: If the element cannot be located.
+            AutomationError: If the action fails.
         """
-        pass
+        ...
 
     def send_right_click(self) -> None:
         """
-        Sends a right click to the element.
-        
+        Send a right-click to the element center.
+
         Raises:
-        - ValueError: If the element cannot be found or the right click action fails.
+            ElementNotFoundError: If the element cannot be located.
+            AutomationError: If the action fails.
         """
-        pass
+        ...
 
     def hold_click(self, holdkeys: str) -> None:
         """
-        Performs a click while holding specified keys.
-        
-        Parameters:
-        - holdkeys (str): The keys to hold while clicking (e.g., "ctrl", "shift", "alt")
-        
+        Click the element while holding modifier keys.
+
+        Args:
+            holdkeys: Modifier keys to hold (e.g. "ctrl", "shift", "alt").
+
         Raises:
-        - ValueError: If the element cannot be found or the hold click action fails.
+            ElementNotFoundError: If the element cannot be located.
+            AutomationError: If the action fails.
         """
-        pass
+        ...
 
     def send_keys(self, keys: str) -> None:
         """
-        Sends keyboard input to the element with a 20ms interval between keystrokes.
-        
-        `{}` is used for some special keys. For example: `{ctrl}{alt}{delete}`, `{shift}{home}`.
-        `()` is used for group keys. The '(' symbol only takes effect after the '{}' symbol. For example: `{ctrl}(AB)` types `Ctrl+A+B`.
-         `{}()` can be quoted by `{}`. For example: `{{}Hi,{(}bromium!{)}{}}` types `{Hi,(bromium)}`.
-  
-        When inputting only texts without special keys, you should use `send_text()` instead.
+        Send keyboard input to the element.
 
-        Parameters:
-        - keys (str): The keys to send to the element
-        
+        Special keys use ``{}`` syntax: ``{ctrl}{alt}{delete}``, ``{shift}{home}``.
+        Group keys with ``()``: ``{ctrl}(AB)`` sends Ctrl+A then Ctrl+B.
+        Escape braces/parens: ``{{}Hi{}}`` types ``{Hi}``.
+
+        For plain text without special keys, prefer ``send_text()`` instead.
+
+        Args:
+            keys: The key sequence to send.
+
         Raises:
-        - ValueError: If the element cannot be found or the send keys action fails.
+            ElementNotFoundError: If the element cannot be located.
+            AutomationError: If the action fails.
         """
-        pass
+        ...
 
     def send_text(self, text: str) -> None:
         """
-        Sends text input to the element with a 20ms interval between characters.
-        
-        Parameters:
-        - text (str): The text to send to the element
-        
+        Send plain text to the element.
+
+        Uses the Value pattern if supported, otherwise falls back to
+        simulated key strokes with a 20ms interval.
+
+        Args:
+            text: The text to type into the element.
+
         Raises:
-        - ValueError: If the element cannot be found or the send text action fails.
+            ElementNotFoundError: If the element cannot be located.
+            AutomationError: If the action fails.
         """
-        pass
+        ...
 
     def hold_send_keys(self, holdkeys: str, keys: str, interval: int) -> None:
         """
-        Sends keys while holding modifier keys.
-        
-        Parameters:
-        - holdkeys (str): The modifier keys to hold (e.g., "ctrl", "shift", "alt")
-        - keys (str): The keys to send while holding the modifier keys
-        - interval (int): The interval in milliseconds between keystrokes
-        
+        Send keys while holding modifier keys with a custom interval.
+
+        Args:
+            holdkeys: Modifier keys to hold (e.g. "ctrl", "shift").
+            keys: The keys to send while holding modifiers.
+            interval: Interval in milliseconds between keystrokes.
+
         Raises:
-        - ValueError: If the element cannot be found or the hold send keys action fails.
+            ElementNotFoundError: If the element cannot be located.
+            AutomationError: If the action fails.
         """
-        pass
+        ...
 
     def show_context_menu(self) -> None:
         """
-        Shows the context menu for the element.
-        
+        Show the context menu for this element.
+
         Raises:
-        - ValueError: If the element cannot be found or showing the context menu fails.
+            ElementNotFoundError: If the element cannot be located.
+            AutomationError: If showing the context menu fails.
         """
-        pass
-    
+        ...
+
+# ─── ElementIterator ──────────────────────────────────────────────────────────
+
+class ElementIterator:
+    """Iterator over Element objects. Returned by ``WinDriver.__iter__()``."""
+
+    def __iter__(self) -> "ElementIterator": ...
+    def __next__(self) -> Element: ...
+    def __len__(self) -> int: ...
+
+# ─── WinDriver ────────────────────────────────────────────────────────────────
+
 class WinDriver:
     """
-    A class representing a windows driver for the MS Windows operating system.
-    
-    Attributes:
-    - timeout_ms (int): timeout in milliseconds for the driver to respond.
-    - ui_tree (UITree): internal representation of the UI hierarchy
-    - tree_needs_update (bool): flag indicating if the UI tree needs to be refreshed
+    The main driver for interacting with the Windows UI Automation tree.
 
-    Methods:
-    - __init__(self, timeout_ms: int) -> None: Initializes the WinDriver instance with a timeout in milliseconds.
-    - __repr__(self) -> str: Returns a string representation of the Windriver instance.
-    - __str__(self) -> str: Returns a string representation of the Windriver instance.
-    - get_timeout(self) -> int: Returns the current timeout value in milliseconds.
-    - set_timeout(self, timeout_ms: int) -> None: Sets a new timeout value in milliseconds.
-    - get_cursor_pos(self) -> tuple[int, int]: Returns the current cursor position.
-    - get_ui_element(self, x: int, y: int) -> Element: Returns the UI Element at the given coordinates.
-    - get_screen_context(self) -> ScreenContext: Returns the screen context information.
-    - take_screenshot(self) -> str: Takes a screenshot of the current screen, saves it and returns the path to the file created.
-    - launch_or_activate_app(self, app_path: str, xpath: str) -> bool: Launches or activates an application.
-    - refresh(self) -> None: Refreshes the internal UI tree representation.
+    Construct with a timeout (used as the default retry duration for element
+    lookups) and an optional window-title filter to scope the tree.
+
+    Supports Python collection protocols:
+        - ``len(driver)`` — number of elements in the tree
+        - ``for elem in driver`` — iterate all elements
+        - ``xpath in driver`` — check if an XPath exists in the tree
     """
 
-    def __init__(self, timeout_ms: int, window_title: Optional[str]) -> None:
+    def __init__(self, timeout_ms: int, window_title: Optional[str] = None) -> None:
         """
-        Initializes the WinDriver instance with a timeout in milliseconds, filtering by window title if provided.
-        
-        Parameters:
-        - timeout_ms (int): The timeout value in milliseconds for UI operations.
-        - window_title (Optional[str]): The window title to filter by. If None, no filter is applied.
-        """
-        pass
+        Create a new WinDriver, building the UI Automation tree.
 
-    def __repr__(self) -> str:
+        Args:
+            timeout_ms: Default timeout in milliseconds for element lookup retries.
+            window_title: Optional window title to filter the tree. If None, the
+                full desktop tree (depth 2) is captured.
+
+        Raises:
+            TreeConstructionError: If the UI tree cannot be built within 120 seconds.
         """
-        Returns a string representation of the Windriver instance.
-        
+        ...
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> ElementIterator: ...
+    def __contains__(self, xpath: str) -> bool: ...
+
+    # ─── Properties ───────────────────────────────────────────────────────
+
+    @property
+    def timeout_ms(self) -> int:
+        """The default timeout in milliseconds for element lookup operations."""
+        ...
+
+    @timeout_ms.setter
+    def timeout_ms(self, value: int) -> None: ...
+
+    @property
+    def element_count(self) -> int:
+        """Number of UI elements currently in the tree."""
+        ...
+
+    @property
+    def window_title(self) -> Optional[str]:
+        """The window title filter, if set."""
+        ...
+
+    @window_title.setter
+    def window_title(self, value: Optional[str]) -> None: ...
+
+    # ─── Element lookup ───────────────────────────────────────────────────
+
+    def get_element_by_coordinates(self, x: int, y: int) -> Element:
+        """
+        Find the UI element at the given screen coordinates.
+
+        Args:
+            x: The x screen coordinate.
+            y: The y screen coordinate.
+
         Returns:
-        - str: A string representation of the Windriver instance.
-        """
-        pass
+            The innermost element containing the point.
 
-    def __str__(self) -> str:
+        Raises:
+            ElementNotFoundError: If no element exists at those coordinates.
         """
-        Returns a string representation of the Windriver instance.
-        
+        ...
+
+    def get_element_by_xpath(self, xpath: str, timeout_ms: Optional[int] = None) -> Element:
+        """
+        Find a single element by XPath.
+
+        If not found immediately, retries with tree refreshes until ``timeout_ms``
+        elapses. When ``timeout_ms`` is None, the driver's default ``timeout_ms``
+        is used. Pass ``0`` to disable retrying.
+
+        Args:
+            xpath: The XPath locator string.
+            timeout_ms: Per-call timeout override in milliseconds, or None to
+                use the driver default.
+
         Returns:
-        - str: A string representation of the Windriver instance.
-        """
-        pass
+            The matching Element.
 
-    def reload(self) -> WinDriver:
+        Raises:
+            ElementNotFoundError: If no element matches after the timeout.
+            TreeConstructionError: If tree refresh fails during retries.
         """
-        Reloads the WinDriver instance to refresh its internal state.
-        
+        ...
+
+    def get_elements_by_xpath(self, xpath: str) -> list[Element]:
+        """
+        Find all elements matching an XPath expression.
+
+        Args:
+            xpath: The XPath locator string.
+
         Returns:
-        - WinDriver: A new instance of WinDriver with refreshed state.
+            A list of matching Elements.
+
+        Raises:
+            ElementNotFoundError: If no elements match.
         """
-        pass
-    
-    def get_timeout(self) -> int:
+        ...
+
+    def find_elements(
+        self,
+        control_type: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> list[Element]:
         """
-        Returns the current timeout value in milliseconds.
-        
+        Find elements matching optional filters.
+
+        Filters are case-insensitive substring matches applied to all
+        elements currently in the tree.
+
+        Args:
+            control_type: Filter by control type (e.g. "Button", "Edit").
+            name: Filter by element name.
+
         Returns:
-        - int: The current timeout value in milliseconds.
-        """
-        pass
+            All matching elements. Returns an empty list if none match.
 
-    def get_no_of_ui_elements(self) -> int:
+        Examples:
+            >>> driver.find_elements(control_type="Button")
+            >>> driver.find_elements(name="Save")
+            >>> driver.find_elements(control_type="Edit", name="Search")
         """
-        Returns the number of UI elements in the current UI tree.
-        
-        Returns:
-        - int: The number of UI elements.
-        """
-        pass
+        ...
 
-    def set_timeout(self, timeout_ms: int) -> None:
-        """
-        Sets a new timeout value in milliseconds.
-        
-        Parameters:
-        - timeout_ms (int): The new timeout value in milliseconds.
-        """
-        pass
-
-    def set_window_title(self, window_title: Optional[str]) -> None:
-        """
-        Sets a window title filter for the WinDriver instance.
-        
-        Parameters:
-        - window_title (Optional[str]): The window title to filter by. If None, no filter is applied.
-        """
-        pass
+    # ─── Actions ──────────────────────────────────────────────────────────
 
     def get_cursor_pos(self) -> tuple[int, int]:
         """
-        Returns the current cursor position as a tuple of (x, y) coordinates.
-        
-        Returns:
-        - tuple[int, int]: The current cursor position as (x, y) coordinates.
-        """
-        pass
+        Get the current mouse cursor position.
 
-    def get_element_by_coordinates(self, x: int, y: int) -> 'Element':
-        """
-        Returns the Windows UI Automation API UI element of the window at the given coordinates.
-        
-        Parameters:
-        - x (int): The x-coordinate of the window.
-        - y (int): The y-coordinate of the window.
-        
         Returns:
-        - Element: The Windows UI Automation API UI element of the window at the given coordinates.
+            A tuple of (x, y) screen coordinates.
         """
-        pass
+        ...
 
-    def get_element_by_xpath(self, xpath: str, timeout_ms: Optional[int]) -> 'Element':
+    def refresh(self, window_title: Optional[str] = None) -> None:
         """
-        Returns the Windows UI Automation API UI element of the window at the given xpath. As an xpath
-        is a string representation of the UI element, it is not a valid xpath in the XML sense.
-        The search is following a three step approach:
-        1. A UI element is searched by its exact xpath.
-        2. If the xpath does not provide a unique way to identify an elemt, the element is 
-           searched for in the entire UI sub-tree.
-           2.1. If there is a single matching element, this element is returned (irrespective if the xpath is a 100% match).
-           2.2. If there are multiple matching elements, each found element is checked if the xpath
-                matches and if a matching xpath is found the respective element is returned.
-        3. if no matching element is found, an exception is raised.
-            
-        Parameters:
-        - xpath (str): The xpath of the window.
-        
-        Returns:
-        - Element: The Windows UI Automation API UI element of the window at the given xpath.
-        """
-        pass
+        Refresh the UI tree by re-scanning the current window state.
 
-    def get_elements_by_xpath(self, xpath: str) -> list['Element']:
+        Mutates this driver in place. The old tree is replaced.
+
+        Args:
+            window_title: Optional title to filter by. If None, uses the
+                stored window_title (if any), or scans the full desktop.
+
+        Raises:
+            TreeConstructionError: If the refresh fails.
         """
-        Returns a list of Windows UI Automation API UI elements matching the given xpath.
-        
-        Parameters:
-        - xpath (str): The xpath of the window.
-        
-        Returns:
-        - list[Element]: A list of Windows UI Automation API UI elements matching the given xpath.
-        """
-        pass
+        ...
 
     def pretty_print_ui_tree(self) -> None:
-        """
-        Pretty prints the current UI tree to the console for debugging purposes.
-        """
-        pass
+        """Print the current UI tree to stdout for debugging."""
+        ...
 
-    def get_screen_context(self) -> 'ScreenContext':
+    def get_screen_context(self) -> "ScreenContext":
         """
-        Returns the screen size and scale as a ScreenContext object.
-        
+        Get information about all connected display screens.
+
         Returns:
-        - ScreenContext: The screen size and scale as a ScreenContext object.
+            A ScreenContext containing all screen metadata.
         """
-        pass
+        ...
 
     def take_screenshot(self) -> str:
         """
-        Takes a screenshot of the current screen, saves it and returns the path to the file created.
-        
-        The screenshot is saved in a temporary directory and the path to the file is returned.
-        
+        Take a screenshot of the current screen.
+
+        The screenshot is saved to a temporary directory.
+
         Returns:
-        - str: The path to the screenshot file.
-        
+            The file path of the saved screenshot.
+
         Raises:
-        - RuntimeError: If taking the screenshot fails.
+            AutomationError: If taking the screenshot fails.
         """
-        pass
+        ...
 
     def launch_or_activate_app(self, app_path: str, xpath: str) -> Element:
         """
-        Launch or activate an application using its path and an XPath.
-        
-        This method will:
-        1. Try to find and activate an existing window that matches the application name or XPath
-        2. If no matching window is found, launch the application from the provided path
-        3. Wait for the application window to appear and bring it to the foreground
-        
-        Parameters:
-        - app_path (str): Full path to the application executable
-        - xpath (str): XPath that identifies an element in the application window
-        
+        Launch or activate an application.
+
+        If a window matching the app or XPath is already open, it is brought
+        to the foreground. Otherwise the application is launched from
+        ``app_path`` and the method waits for the window to appear.
+
+        Args:
+            app_path: Full path to the application executable.
+            xpath: XPath identifying an element in the application window.
+
         Returns:
-        - Element: The UI element matching the provided XPath
-        """
-        pass
+            The Element matching the provided XPath.
 
-    def refresh(self, window_title: Optional[str]) -> None:
-        """
-        Refreshes the internal UI tree representation.
-        
-        This method updates the UI hierarchy by scanning the current window state.
-        It runs in a separate thread to avoid blocking the main thread.
-        
         Raises:
-        - RuntimeError: If refreshing the UI tree fails.
+            AutomationError: If launch/activation fails.
         """
-        pass
+        ...
 
+# ─── ScreenInfo ───────────────────────────────────────────────────────────────
 
 class ScreenInfo:
-    """
-    A class representing information about a display screen.
-    
-    Attributes:
-        id (int): Unique identifier associated with the display
-        name (str): The display name
-        friendly_name (str): The display friendly name
-        x (int): The display x coordinate
-        y (int): The display y coordinate
-        width (int): The display pixel width
-        height (int): The display pixel height
-        width_mm (int): The width of a display in millimeters (may be 0)
-        height_mm (int): The height of a display in millimeters (may be 0)
-        rotation (float): Screen rotation in clock-wise degrees (0, 90, 180, 270)
-        scale_factor (float): Output device's pixel scale factor
-        frequency (float): The display refresh rate
-        is_primary (bool): Whether the screen is the main screen
-    """
-    def __init__(self, id: int, name: str, friendly_name: str, x: int, y: int, 
-                 width: int, height: int, width_mm: int, height_mm: int, 
-                 rotation: float, scale_factor: float, frequency: float, 
-                 is_primary: bool) -> None:
-        """
-        Initialize a ScreenInfo instance.
-        
-        Args:
-            id (int): Unique identifier associated with the display
-            name (str): The display name
-            friendly_name (str): The display friendly name
-            x (int): The display x coordinate
-            y (int): The display y coordinate
-            width (int): The display pixel width
-            height (int): The display pixel height
-            width_mm (int): The width of a display in millimeters
-            height_mm (int): The height of a display in millimeters
-            rotation (float): Screen rotation in clock-wise degrees
-            scale_factor (float): Output device's pixel scale factor
-            frequency (float): The display refresh rate
-            is_primary (bool): Whether the screen is the main screen
-        """
-        pass
+    """Information about a single display screen."""
 
+    def __init__(
+        self,
+        id: int,
+        name: str,
+        friendly_name: str,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        width_mm: int,
+        height_mm: int,
+        rotation: float,
+        scale_factor: float,
+        frequency: float,
+        is_primary: bool,
+    ) -> None: ...
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+
+    @property
+    def id(self) -> int:
+        """Unique identifier associated with the display."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """The display name."""
+        ...
+
+    @property
+    def friendly_name(self) -> str:
+        """The display friendly name."""
+        ...
+
+    @property
+    def x(self) -> int:
+        """The display x coordinate."""
+        ...
+
+    @property
+    def y(self) -> int:
+        """The display y coordinate."""
+        ...
+
+    @property
+    def width(self) -> int:
+        """The display pixel width."""
+        ...
+
+    @property
+    def height(self) -> int:
+        """The display pixel height."""
+        ...
+
+    @property
+    def width_mm(self) -> int:
+        """The width of the display in millimeters. May be 0."""
+        ...
+
+    @property
+    def height_mm(self) -> int:
+        """The height of the display in millimeters. May be 0."""
+        ...
+
+    @property
+    def rotation(self) -> float:
+        """Screen rotation in clock-wise degrees (0, 90, 180, 270)."""
+        ...
+
+    @property
+    def scale_factor(self) -> float:
+        """Output device's pixel scale factor."""
+        ...
+
+    @property
+    def frequency(self) -> float:
+        """The display refresh rate."""
+        ...
+
+    @property
     def is_primary(self) -> bool:
-        """Returns whether this screen is the primary display."""
-        pass
+        """Whether this is the primary display."""
+        ...
 
-    def get_name(self) -> str:
-        """Returns the display name."""
-        pass
-
-    def get_friendly_name(self) -> str:
-        """Returns the display friendly name."""
-        pass
-
-    def get_id(self) -> int:
-        """Returns the unique identifier associated with the display."""
-        pass
-
-    def get_x(self) -> int:
-        """Returns the display x coordinate."""
-        pass
-
-    def get_y(self) -> int:
-        """Returns the display y coordinate."""
-        pass
-
-    def get_width(self) -> int:
-        """Returns the display pixel width."""
-        pass
-
-    def get_height(self) -> int:
-        """Returns the display pixel height."""
-        pass
-
-    def get_width_mm(self) -> int:
-        """Returns the width of the display in millimeters."""
-        pass
-
-    def get_height_mm(self) -> int:
-        """Returns the height of the display in millimeters."""
-        pass
-
-    def get_rotation(self) -> float:
-        """Returns the screen rotation in clock-wise degrees."""
-        pass
-
-    def get_scale_factor(self) -> float:
-        """Returns the output device's pixel scale factor."""
-        pass
-
-    def get_frequency(self) -> float:
-        """Returns the display refresh rate."""
-        pass
-
-    def __repr__(self) -> str:
-        """Returns a string representation of the ScreenInfo instance."""
-        pass
-
-    def __str__(self) -> str:
-        """Returns a string representation of the ScreenInfo instance."""
-        pass
+# ─── ScreenContext ────────────────────────────────────────────────────────────
 
 class ScreenContext:
     """
-    A class representing information about all display screens in the system.
-    
-    Attributes:
-        screens (list[ScreenInfo]): List of all available display screens
-        primary_screen (ScreenInfo): The primary display screen
-    """
-    
-    def __init__(self) -> None:
-        """
-        Initialize a ScreenContext instance.
-        Automatically detects and initializes information about all available displays.
-        """
-        pass
+    Information about all display screens in the system.
 
-    def __repr__(self) -> str:
-        """Returns a string representation of the ScreenContext instance."""
-        pass
+    Automatically detects all connected displays on construction.
+    """
 
-    def __str__(self) -> str:
-        """Returns a string representation of the ScreenContext instance."""
-        pass
+    def __init__(self) -> None: ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
 
-    def get_primary_screen(self) -> 'ScreenInfo':
-        """
-        Returns information about the primary display screen.
-        
-        Returns:
-            ScreenInfo: The primary display screen information
-        """
-        pass
+    @property
+    def primary_screen(self) -> ScreenInfo:
+        """The primary display screen."""
+        ...
 
-    def get_screens(self) -> list['ScreenInfo']:
-        """
-        Returns information about all available display screens.
-        
-        Returns:
-            list[ScreenInfo]: List of all available display screens
-        """
-        pass
-    
-class LogLevel:
-    """Log level enumeration for controlling logging verbosity."""
-    Error: 'LogLevel'
-    Warn: 'LogLevel'
-    Info: 'LogLevel'
-    Debug: 'LogLevel'
-    Trace: 'LogLevel'
+    @property
+    def screens(self) -> list[ScreenInfo]:
+        """List of all available display screens."""
+        ...
 
-def set_log_level(level: LogLevel) -> None:
-    """
-    Set the logging level for the bromium module.
-    
-    Parameters:
-    - level (LogLevel): The desired log level (Error, Warn, Info, Debug, or Trace)
-    
-    Example:
-        import bromium
-        bromium.set_log_level(bromium.LogLevel.Info)
-    """
-    pass
+# ─── Legacy class (use module-level functions instead) ────────────────────────
 
-def get_log_level() -> str:
+class Bromium:
     """
-    Get the current logging level.
-    
-    Returns:
-    - str: The current log level as a string
-    """
-    pass
+    Legacy configuration namespace. Prefer module-level functions instead.
 
-def set_log_file(path: str) -> None:
+    For example, use ``bromium.init_logging(...)`` rather than
+    ``Bromium.init_logging(...)``.
     """
-    Set the full path for the log file. Creates parent directories if needed.
-    
-    Parameters:
-    - path (str): Full path to the log file
-    
-    Example:
-        import bromium
-        bromium.set_log_file("D:/my_logs/bromium_custom.log")
-    """
-    pass
 
-def set_log_directory(dir_path: str) -> None:
-    """
-    Set a custom directory for log files. A timestamped log file will be created in this directory.
-    
-    Parameters:
-    - dir_path (str): Directory path where log files should be created
-    
-    Example:
-        import bromium
-        bromium.set_log_directory("D:/my_custom_logs")
-    """
-    pass
+    @staticmethod
+    def init_logging(
+        log_path: Optional[str] = None,
+        log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]] = None,
+        enable_console: Optional[bool] = None,
+        enable_file: Optional[bool] = None,
+    ) -> None: ...
 
-def get_log_file() -> str:
-    """
-    Get the current log file path. Returns default path if not set.
-    
-    Returns:
-    - str: The current log file path
-    """
-    pass
+    @staticmethod
+    def get_win_driver(timeout_ms: int, window_title: Optional[str] = None) -> WinDriver: ...
 
-def get_default_log_directory() -> str:
-    """
-    Get the default log directory path (C:\\bromium_logs on Windows).
-    
-    Returns:
-    - str: The default log directory path
-    """
-    pass
+    @staticmethod
+    def get_version() -> str: ...
+
+    @staticmethod
+    def get_log_file() -> str: ...
+
+    @staticmethod
+    def set_log_file(log_file: str) -> None: ...
+
+    @staticmethod
+    def get_log_level() -> str: ...
+
+    @staticmethod
+    def set_log_level(log_level: str) -> None: ...
+
+    @staticmethod
+    def set_log_directory(log_directory: str) -> None: ...
+
+    @staticmethod
+    def enable_console_logging(enable: bool) -> None: ...
+
+    @staticmethod
+    def enable_file_logging(enable: bool) -> None: ...
+
+    @staticmethod
+    def reset_log_file() -> None: ...

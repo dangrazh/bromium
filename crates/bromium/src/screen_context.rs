@@ -88,48 +88,65 @@ impl ScreenInfo {
             is_primary,
         }
     }
+
+    // ─── Properties (Pythonic attribute access) ───────────────────────────────
+
+    #[getter]
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+    #[getter]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    #[getter]
+    pub fn friendly_name(&self) -> &str {
+        &self.friendly_name
+    }
+    #[getter]
+    pub fn x(&self) -> i32 {
+        self.x
+    }
+    #[getter]
+    pub fn y(&self) -> i32 {
+        self.y
+    }
+    #[getter]
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    #[getter]
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+    #[getter]
+    pub fn width_mm(&self) -> i32 {
+        self.width_mm
+    }
+    #[getter]
+    pub fn height_mm(&self) -> i32 {
+        self.height_mm
+    }
+    #[getter]
+    pub fn rotation(&self) -> f32 {
+        self.rotation
+    }
+    #[getter]
+    pub fn scale_factor(&self) -> f32 {
+        self.scale_factor
+    }
+    #[getter]
+    pub fn frequency(&self) -> f32 {
+        self.frequency
+    }
+    #[getter]
     pub fn is_primary(&self) -> bool {
         self.is_primary
     }
-    pub fn get_name(&self) -> &str {
-        &self.name
-    }
-    pub fn get_friendly_name(&self) -> &str {
-        &self.friendly_name
-    }
-    pub fn get_id(&self) -> u32 {
-        self.id
-    }
-    pub fn get_x(&self) -> i32 {
-        self.x
-    }
-    pub fn get_y(&self) -> i32 {
-        self.y
-    }
-    pub fn get_width(&self) -> u32 {
-        self.width
-    }
-    pub fn get_height(&self) -> u32 {
-        self.height
-    }
-    pub fn get_width_mm(&self) -> i32 {
-        self.width_mm
-    }
-    pub fn get_height_mm(&self) -> i32 {
-        self.height_mm
-    }
-    pub fn get_rotation(&self) -> f32 {
-        self.rotation
-    }
-    pub fn get_scale_factor(&self) -> f32 {
-        self.scale_factor
-    }
-    pub fn get_frequency(&self) -> f32 {
-        self.frequency
-    }
+
     pub fn __repr__(&self) -> String {
         format!(
-            "<ScreenInfo id={} name={} friendly_name={} x={} y={} width={} height={} width_mm={} height_mm={} rotation={} scale_factor={} frequency={} is_primary={}>",
+            "<ScreenInfo id={} name='{}' friendly_name='{}' x={} y={} width={} height={} is_primary={}>",
             self.id,
             self.name,
             self.friendly_name,
@@ -137,11 +154,6 @@ impl ScreenInfo {
             self.y,
             self.width,
             self.height,
-            self.width_mm,
-            self.height_mm,
-            self.rotation,
-            self.scale_factor,
-            self.frequency,
             self.is_primary
         )
     }
@@ -180,7 +192,7 @@ impl ScreenContext {
 
     pub fn __repr__(&self) -> PyResult<String> {
         PyResult::Ok(format!(
-            "<ScreenContext primary_screen={} screens_count={}>",
+            "<ScreenContext primary_screen='{}' screens_count={}>",
             self.primary_screen.name,
             self.screens.len()
         ))
@@ -188,10 +200,18 @@ impl ScreenContext {
     pub fn __str__(&self) -> PyResult<String> {
         self.__repr__()
     }
-    pub fn get_primary_screen(&self) -> PyResult<ScreenInfo> {
-        Ok(self.primary_screen.clone())
+
+    // ─── Properties ──────────────────────────────────────────────────────────
+
+    /// The primary display screen.
+    #[getter]
+    pub fn primary_screen(&self) -> ScreenInfo {
+        self.primary_screen.clone()
     }
-    pub fn get_screens(&self) -> PyResult<Vec<ScreenInfo>> {
-        Ok(self.screens.clone())
+
+    /// List of all available display screens.
+    #[getter]
+    pub fn screens(&self) -> Vec<ScreenInfo> {
+        self.screens.clone()
     }
 }

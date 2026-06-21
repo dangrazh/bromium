@@ -1,18 +1,18 @@
-use crate::conversion::ConvertFromControlType;
+use crate::common_types::UIElementInTree;
 use crate::error::UITreeError;
 
 use crate::save_ui_element::SaveUIElement;
 use bromium_common::{format_runtime_id, get_ui_automation_instance};
 
-// use crate::commons::FileWriter;
 use crate::UITreeMap;
-use xmlutil::XpathQueryResult; //Xot
-use xmlutil::xml::{XMLDomNode, XMLDomWriter};
+use xmlutil::XpathQueryResult;
 use xmlutil::xpath_eval::eval_xpath;
-use xmlutil::xpath_gen::get_xpath_full_from_runtime_id; //get_xpath_from_runtime_id,
+use xmlutil::xpath_gen::get_xpath_full_from_runtime_id;
 
+use quick_xml::Writer;
+use quick_xml::events::{BytesEnd, BytesStart, Event};
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
+use std::io::Cursor;
 use std::sync::mpsc::{Sender, channel};
 
 use uiautomation::{UIElement, UITreeWalker};
@@ -20,70 +20,52 @@ use uiautomation::{UIElement, UITreeWalker};
 use log::{debug, error, info, trace, warn};
 
 #[derive(Debug, Clone)]
-pub struct UIElementInTree {
-    runtime_id: Vec<i32>,
-    element_props: SaveUIElement,
-    tree_index: usize,
-}
-
-impl UIElementInTree {
-    pub fn new(element_props: SaveUIElement, tree_index: usize) -> Self {
-        let rt_id = element_props.get_runtime_id().clone();
-        UIElementInTree {
-            runtime_id: rt_id,
-            element_props,
-            tree_index,
-        }
-    }
-
-    pub fn get_element_props(&self) -> &SaveUIElement {
-        &self.element_props
-    }
-
-    pub fn get_tree_index(&self) -> usize {
-        self.tree_index
-    }
-}
-
-impl PartialEq for UIElementInTree {
-    fn eq(&self, other: &Self) -> bool {
-        self.runtime_id == other.runtime_id
-    }
-}
-
-impl Eq for UIElementInTree {}
-
-impl Hash for UIElementInTree {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.runtime_id.hash(state);
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct UITree {
-    tree: UITreeMap<SaveUIElement>,
+    tree: UITreeMap<()>,
     xml_dom_tree: String,
     ui_elements: Vec<UIElementInTree>,
+    node_to_elem: Vec<usize>,
 }
 
 impl UITree {
     pub fn new(
-        tree: UITreeMap<SaveUIElement>,
+        tree: UITreeMap<()>,
         xml_dom_tree: String,
         ui_elements: Vec<UIElementInTree>,
     ) -> Self {
+        let node_to_elem = Self::build_node_to_elem(&tree, &ui_elements);
         UITree {
             tree,
             xml_dom_tree,
             ui_elements,
+            node_to_elem,
         }
     }
 
-    pub fn get_tree(&self) -> &UITreeMap<SaveUIElement> {
+    fn build_node_to_elem(tree: &UITreeMap<()>, elements: &[UIElementInTree]) -> Vec<usize> {
+        let mut rtid_to_pos: crate::UIHashMap<String, usize> = crate::UIHashMap::default();
+        for (pos, elem) in elements.iter().enumerate() {
+            let rtid = format_runtime_id(elem.get_element_props().get_runtime_id());
+            rtid_to_pos.insert(rtid, pos);
+        }
+        let mut map = vec![0; tree.node_count()];
+        for (i, slot) in map.iter_mut().enumerate() {
+            if let Some(&pos) = rtid_to_pos.get(&tree.node(i).runtime_id) {
+                *slot = pos;
+            }
+        }
+        map
+    }
+
+    fn rebuild_node_to_elem(&mut self) {
+        self.node_to_elem = Self::build_node_to_elem(&self.tree, &self.ui_elements);
+    }
+
+    pub fn get_tree(&self) -> &UITreeMap<()> {
         &self.tree
     }
 
-    pub fn get_tree_mut(&mut self) -> &mut UITreeMap<SaveUIElement> {
+    pub fn get_tree_mut(&mut self) -> &mut UITreeMap<()> {
         &mut self.tree
     }
 
@@ -91,7 +73,7 @@ impl UITree {
         &self.xml_dom_tree
     }
 
-    pub fn get_elements(&self) -> &Vec<UIElementInTree> {
+    pub fn get_elements(&self) -> &[UIElementInTree] {
         &self.ui_elements
     }
 
@@ -99,11 +81,14 @@ impl UITree {
         &mut self.ui_elements
     }
 
-    pub fn for_each<F>(&self, f: F)
+    pub fn for_each<F>(&self, mut f: F)
     where
         F: FnMut(usize, &SaveUIElement),
     {
-        self.tree.for_each(f);
+        self.tree.for_each(|idx, _| {
+            let elem_pos = self.node_to_elem[idx];
+            f(idx, self.ui_elements[elem_pos].get_element_props());
+        });
     }
 
     pub fn root(&self) -> usize {
@@ -116,27 +101,32 @@ impl UITree {
 
     pub fn node(&self, index: usize) -> (&str, &SaveUIElement) {
         let node = self.tree.node(index);
-        (&node.name, &node.data)
+        let elem_pos = self.node_to_elem[index];
+        (&node.name, self.ui_elements[elem_pos].get_element_props())
     }
 
     pub fn pretty_print_tree(&self) {
-        let mut visited = HashSet::new();
-        self.debug_tree(self.root(), 0, &mut visited);
+        self.debug_tree(self.root(), 0, 0);
     }
 
-    fn debug_tree(&self, index: usize, indent: usize, visited: &mut HashSet<usize>) {
-        if visited.contains(&index) {
-            println!("{}(Cycle detected at node {})", " ".repeat(indent), index);
+    fn debug_tree(&self, index: usize, indent: usize, depth: usize) {
+        if depth > self.tree.node_count() {
+            println!(
+                "{}(Max depth exceeded at node {})",
+                " ".repeat(indent),
+                index
+            );
             return;
         }
-        visited.insert(index);
 
         let node = &self.tree.nodes()[index];
         let prefix = " ".repeat(indent);
-        println!("{}{}: {}", prefix, &node.name, node.data);
+        let elem_pos = self.node_to_elem[index];
+        let elem = self.ui_elements[elem_pos].get_element_props();
+        println!("{}{}: {}", prefix, &node.name, elem);
 
         for &child in &node.children {
-            self.debug_tree(child, indent + 2, visited);
+            self.debug_tree(child, indent + 2, depth + 1);
         }
     }
 
@@ -145,14 +135,11 @@ impl UITree {
         index: usize,
         simple_path: bool,
     ) -> Result<String, xmlutil::xpath_gen::XpathGenError> {
-        let node = &self.tree.node(index);
-        let save_ui_elem = &node.data;
-        let rt_id = format_runtime_id(save_ui_elem.get_element().get_runtime_id());
-        get_xpath_full_from_runtime_id(rt_id.as_str(), self.get_xml_dom_tree(), simple_path)
+        let node = self.tree.node(index);
+        get_xpath_full_from_runtime_id(&node.runtime_id, self.get_xml_dom_tree(), simple_path)
     }
 
     pub fn get_element_by_xpath(&self, xpath: &str) -> Option<&SaveUIElement> {
-        // Patch the xpath with /@RtID if it is missing
         let xpath = if !xpath.ends_with("/@RtID") {
             xpath.to_string() + "/@RtID"
         } else {
@@ -169,8 +156,8 @@ impl UITree {
                 let itm = items.first().unwrap_or(&default_result);
                 let runtime_id = itm.get_item_value();
                 let node = self.get_tree().get_element_by_runtime_id(runtime_id)?;
-                let ui_elem = node.data.get_element();
-                Some(ui_elem)
+                let elem_pos = self.node_to_elem[node.index];
+                Some(self.ui_elements[elem_pos].get_element_props())
             }
             _ => {
                 warn!(
@@ -182,14 +169,13 @@ impl UITree {
                 let itm = items.first().unwrap_or(&default_result);
                 let runtime_id = itm.get_item_value();
                 let node = self.get_tree().get_element_by_runtime_id(runtime_id)?;
-                let ui_elem = node.data.get_element();
-                Some(ui_elem)
+                let elem_pos = self.node_to_elem[node.index];
+                Some(self.ui_elements[elem_pos].get_element_props())
             }
         }
     }
 
     pub fn get_elements_by_xpath(&self, xpath: &str) -> Option<Vec<&SaveUIElement>> {
-        // Patch the xpath with /@RtID if it is missing
         let xpath = if !xpath.ends_with("/@RtID") {
             xpath.to_string() + "/@RtID"
         } else {
@@ -206,8 +192,8 @@ impl UITree {
                 let itm = items.first().unwrap_or(default_result);
                 let runtime_id = itm.get_item_value();
                 let node = self.get_tree().get_element_by_runtime_id(runtime_id)?;
-                let ui_elem = node.data.get_element();
-                results.push(ui_elem);
+                let elem_pos = self.node_to_elem[node.index];
+                results.push(self.ui_elements[elem_pos].get_element_props());
                 Some(results)
             }
             _ => {
@@ -215,8 +201,8 @@ impl UITree {
                 for itm in items {
                     let runtime_id = itm.get_item_value();
                     if let Some(node) = self.get_tree().get_element_by_runtime_id(runtime_id) {
-                        let ui_elem = node.data.get_element();
-                        results.push(ui_elem);
+                        let elem_pos = self.node_to_elem[node.index];
+                        results.push(self.ui_elements[elem_pos].get_element_props());
                     } else {
                         warn!(
                             "Element with runtime_id '{}' not found in tree, skipping",
@@ -234,17 +220,11 @@ impl UITree {
 }
 
 impl UITree {
-    // pub fn refresh_tree(&mut self) {
-    //     todo!("Implement tree refreshing");
-    // }
-
     pub fn append_or_replace_subtree(
         &mut self,
         parent_index: usize,
         mut subtree: UITree,
     ) -> Result<usize, String> {
-        // Append the subtree to the current tree at the specified parent index
-        // Return the index of the new subtree root in the current tree
         trace!("Parent index to append subtree: {}", parent_index);
         trace!(
             "Appending or replacing subtree with root: {}",
@@ -252,11 +232,9 @@ impl UITree {
         );
         let subtree_root = subtree.root();
         let subtree_node = subtree.get_tree().node(subtree_root);
-        let subtree_save_ui_elem = &subtree_node.data;
-        let subtree_runtime_id =
-            format_runtime_id(subtree_save_ui_elem.get_element().get_runtime_id());
+        let subtree_runtime_id = subtree_node.runtime_id.clone();
+        let subtree_name = subtree_node.name.clone();
 
-        // Check if the parent index exists in the current tree
         if !self.get_tree().has_node(parent_index) {
             error!(
                 "Parent index {} does not exist in the current tree",
@@ -265,13 +243,11 @@ impl UITree {
             return Err("Parent index does not exist in the current tree".to_string());
         }
 
-        // Check if the subtree root already exists in the current tree
         if self
             .get_tree()
             .get_element_by_runtime_id(&subtree_runtime_id)
             .is_some()
         {
-            // Find the existing node index and remove it along with its children
             let existing_node = self
                 .get_tree()
                 .get_element_by_runtime_id(&subtree_runtime_id)
@@ -281,31 +257,21 @@ impl UITree {
                 "Subtree root already exists in the current tree at index {}. Replacing existing subtree.",
                 existing_node_index
             );
-            // Remove the existing node and its children
             self.get_tree_mut()
                 .remove_node(existing_node_index)
                 .map_err(|e| e.to_string())?;
         }
 
-        // Add the root of the subtree to the current tree
         let tree_mut = self.get_tree_mut();
-        let new_index = tree_mut.add_child(
-            parent_index,
-            &subtree_node.name,
-            &subtree_runtime_id,
-            subtree_save_ui_elem.clone(),
-        );
+        let new_index = tree_mut.add_child(parent_index, &subtree_name, &subtree_runtime_id, ());
         debug!("Added subtree root to current tree at index {}", new_index);
 
-        // replace the ui_elements vector with the new elements from the subtree
         remove_in_place(self.get_elements_mut(), subtree.get_elements_mut());
 
-        // add (move) all elements from the subtree to the current tree's ui_elements vector
         self.get_elements_mut().append(subtree.get_elements_mut());
 
-        // sorting the elements by z_order first, then by ascending bounding rect size within each z-order
         info!("Sorting UI elements by z-order and size...");
-        self.get_elements_mut().sort_by(|a, b| {
+        self.get_elements_mut().sort_unstable_by(|a, b| {
             a.get_element_props()
                 .get_z_order()
                 .cmp(&b.get_element_props().get_z_order())
@@ -316,14 +282,9 @@ impl UITree {
                 )
         });
 
-        // Recursively add all children of the subtree root to the treemap
         self.append_children(new_index, &mut subtree, subtree_root)?;
 
-        // Merging the xml_dom_tree strings into a single xml_dom_tree string
-        // using xot create to merge the xml trees
-        // 1. get the xml_dom_tree of the current tree
         let current_xml_dom_tree = self.get_xml_dom_tree();
-        // 2. get the xml_dom_tree of the subtree
         let subtree_xml_dom_tree = subtree.get_xml_dom_tree();
         info!(
             "Merging XML DOM trees... adding new subtree: {}",
@@ -335,6 +296,8 @@ impl UITree {
             &subtree_runtime_id,
         )?;
         self.xml_dom_tree = new_xml_dom_tree;
+
+        self.rebuild_node_to_elem();
 
         Ok(new_index)
     }
@@ -353,19 +316,13 @@ impl UITree {
         );
         for child_index in children {
             let child_node = subtree.get_tree().node(child_index);
-            let child_save_ui_elem = &child_node.data;
-            let child_runtime_id =
-                format_runtime_id(child_save_ui_elem.get_element().get_runtime_id());
+            let child_runtime_id = child_node.runtime_id.clone();
+            let child_name = child_node.name.clone();
 
-            // Add the child to the current tree
-            let new_child_index = self.get_tree_mut().add_child(
-                parent_index,
-                &child_node.name,
-                &child_runtime_id,
-                child_save_ui_elem.clone(),
-            );
+            let new_child_index =
+                self.get_tree_mut()
+                    .add_child(parent_index, &child_name, &child_runtime_id, ());
 
-            // Recursively add the child's children
             self.append_children(new_child_index, subtree, child_index)?;
         }
         Ok(())
@@ -382,30 +339,40 @@ fn append_or_replace_node_by_rt_id(
     xml_dom_subtree: &str,
     target_node_rt_id: &str,
 ) -> Result<String, String> {
-    // 3. parse both xml_dom_trees into xot documents
-    // 4. find the subtree's parent node in the current tree's xot document using the parent_index
-    // 5. if subtree's parent node exists, use the xot .replace() method to replace it with the subtree's root node
-    // 6. if subtree's parent node does not exist, use the xot .append() method to append the subtree's root node to the current tree's root node
-    // 7. serialize the modified current tree's xot document back into a string and update the current tree's xml_dom_tree
-
     let target = target_node_rt_id.to_string();
 
     let mut xot = xot::Xot::new();
-    let root = xot.parse(current_xml_dom_tree).map_err(|e| format!("Failed to parse current XML: {}", e))?;
-    let doc = xot.document_element(root).map_err(|e| format!("Failed to get document element: {}", e))?;
+    let root = xot
+        .parse(current_xml_dom_tree)
+        .map_err(|e| format!("Failed to parse current XML: {}", e))?;
+    let doc = xot
+        .document_element(root)
+        .map_err(|e| format!("Failed to get document element: {}", e))?;
 
     if let Some(existing_node) = find_node_by_rt_id(&mut xot, doc, &target) {
-        let new_subtree = xot.parse(xml_dom_subtree).map_err(|e| format!("Failed to parse subtree XML: {}", e))?;
-        let new_subtree_doc = xot.document_element(new_subtree).map_err(|e| format!("Failed to get subtree document element: {}", e))?;
-        xot.replace(existing_node, new_subtree_doc).map_err(|e| format!("Failed to replace node: {}", e))?;
+        let new_subtree = xot
+            .parse(xml_dom_subtree)
+            .map_err(|e| format!("Failed to parse subtree XML: {}", e))?;
+        let new_subtree_doc = xot
+            .document_element(new_subtree)
+            .map_err(|e| format!("Failed to get subtree document element: {}", e))?;
+        xot.replace(existing_node, new_subtree_doc)
+            .map_err(|e| format!("Failed to replace node: {}", e))?;
 
-        xot.serialize_xml_string(Default::default(), root).map_err(|e| format!("Failed to serialize XML: {}", e))
+        xot.serialize_xml_string(Default::default(), root)
+            .map_err(|e| format!("Failed to serialize XML: {}", e))
     } else {
-        let new_node = xot.parse(xml_dom_subtree).map_err(|e| format!("Failed to parse subtree XML: {}", e))?;
-        let new_node_doc = xot.document_element(new_node).map_err(|e| format!("Failed to get subtree document element: {}", e))?;
-        xot.append(doc, new_node_doc).map_err(|e| format!("Failed to append node: {}", e))?;
+        let new_node = xot
+            .parse(xml_dom_subtree)
+            .map_err(|e| format!("Failed to parse subtree XML: {}", e))?;
+        let new_node_doc = xot
+            .document_element(new_node)
+            .map_err(|e| format!("Failed to get subtree document element: {}", e))?;
+        xot.append(doc, new_node_doc)
+            .map_err(|e| format!("Failed to append node: {}", e))?;
 
-        xot.serialize_xml_string(Default::default(), root).map_err(|e| format!("Failed to serialize XML: {}", e))
+        xot.serialize_xml_string(Default::default(), root)
+            .map_err(|e| format!("Failed to serialize XML: {}", e))
     }
 }
 
@@ -441,7 +408,6 @@ pub fn get_all_elements_xml(
         let _ = tx.send(Err(UITreeError::NoUIAutomation));
         return;
     };
-    // control view walker
     let walker = match automation.get_control_view_walker() {
         Ok(w) => w,
         Err(e) => {
@@ -451,12 +417,10 @@ pub fn get_all_elements_xml(
         }
     };
 
-    // allocate a new ui elements vector with a capacity of 10000 elements
     let mut ui_elements: Vec<UIElementInTree> = Vec::with_capacity(10000);
 
-    let mut xml_writer = XMLDomWriter::new();
+    let mut xml_writer = Writer::new(Cursor::new(Vec::new()));
 
-    // get the root ui element passed in or the desktop and all UI elements below the desktop
     let root = if let Some(elem) = root_element {
         match elem.get_ui_automation_ui_element() {
             Some(e) => e,
@@ -479,55 +443,31 @@ pub fn get_all_elements_xml(
         }
     };
 
-    let runtime_id = format_runtime_id(&root.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]));
+    let ui_elem_props = SaveUIElement::new(&root, 0, 999);
+    let runtime_id = format_runtime_id(ui_elem_props.get_runtime_id());
     let item = format!(
         "'{}' {} ({} | {} | {})",
-        root.get_name().unwrap_or_default(),
-        root.get_control_type().map(|ct| ct.to_string()).unwrap_or_default(),
-        root.get_classname().unwrap_or_default(),
-        root.get_framework_id().unwrap_or_default(),
+        ui_elem_props.get_name(),
+        ui_elem_props.get_control_type(),
+        ui_elem_props.get_classname(),
+        ui_elem_props.get_framework_id(),
         runtime_id
     );
-    let ui_elem_props = SaveUIElement::new(root.clone(), 0, 999);
-    let mut tree = UITreeMap::new(item, runtime_id.clone(), ui_elem_props.clone());
+    let mut tree = UITreeMap::new(item, runtime_id.clone(), ());
+
+    let mut tree_path = ui_elem_props.get_name().clone();
+
     let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, 0);
     ui_elements.push(ui_elem_in_tree);
-    let root_ct_tag = root.get_control_type().map(|ct| ct.as_str()).unwrap_or("Pane");
-    xml_writer.set_root(XMLDomNode::new(root_ct_tag));
-    let Some(xml_root) = xml_writer.get_root_mut() else {
-        error!("XML root not initialized after set_root");
-        let _ = tx.send(Err(UITreeError::XmlError("XML root not initialized".to_string())));
-        return;
-    };
-    xml_root.set_attribute("RtID", runtime_id.as_str());
-    xml_root.set_attribute("z-order", 999.to_string().as_str());
-    xml_root.set_attribute(
-        "Name",
-        root.get_name()
-            .unwrap_or("No name defined".to_string())
-            .as_str(),
-    );
-
-    let mut tree_path = root.get_name().unwrap_or("No name defined".to_string());
-    let control_type = root.get_control_type();
-    match control_type {
-        Ok(ct) => {
-            xml_root.set_attribute("ControlType", ct.as_str());
-        }
-        Err(_) => {
-            xml_root.set_attribute("ControlType", "No control type defined");
-        }
-    }
 
     if let Ok(_first_child) = walker.get_first_child(&root) {
-        // iterate over all child ui elements
         get_element(
             &mut tree,
             &mut ui_elements,
             0,
             &walker,
             &root,
-            xml_root,
+            &mut xml_writer,
             0,
             0,
             max_depth,
@@ -537,19 +477,10 @@ pub fn get_all_elements_xml(
         );
     }
 
-    // creating the XML DOM tree
-    let xml_dom_tree = match xml_writer.to_string() {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Failed to serialize XML DOM tree: {}", e);
-            let _ = tx.send(Err(UITreeError::XmlError(e.to_string())));
-            return;
-        }
-    };
+    let xml_dom_tree = String::from_utf8(xml_writer.into_inner().into_inner()).unwrap_or_default();
 
-    // sorting the elements by z_order first, then by ascending bounding rect size within each z-order
     info!("Sorting UI elements by z-order and size...");
-    ui_elements.sort_by(|a, b| {
+    ui_elements.sort_unstable_by(|a, b| {
         a.get_element_props()
             .get_z_order()
             .cmp(&b.get_element_props().get_z_order())
@@ -560,10 +491,8 @@ pub fn get_all_elements_xml(
             )
     });
 
-    // pack the tree and ui_elements vector into a single struct
     let ui_tree = UITree::new(tree, xml_dom_tree, ui_elements);
 
-    // send the tree containing all UI elements back to the main thread
     info!(
         "Sending UI tree with {} elements to the main thread...",
         ui_tree.get_elements().len()
@@ -595,7 +524,6 @@ pub fn get_all_elements_par_xml(
         let _ = tx.send(Err(UITreeError::NoUIAutomation));
         return;
     };
-    // control view walker
     let walker = match automation.get_control_view_walker() {
         Ok(w) => w,
         Err(e) => {
@@ -605,12 +533,10 @@ pub fn get_all_elements_par_xml(
         }
     };
 
-    // allocate a new ui elements vector with a capacity of 10000 elements
     let mut ui_elements: Vec<UIElementInTree> = Vec::with_capacity(10000);
 
-    let mut xml_writer = XMLDomWriter::new();
+    let mut xml_writer = Writer::new(Cursor::new(Vec::new()));
 
-    // get the desktop and all UI elements below the desktop
     let root = match automation.get_root_element() {
         Ok(e) => e,
         Err(e) => {
@@ -619,55 +545,31 @@ pub fn get_all_elements_par_xml(
             return;
         }
     };
-    let runtime_id = format_runtime_id(&root.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]));
+    let ui_elem_props = SaveUIElement::new(&root, 0, 999);
+    let runtime_id = format_runtime_id(ui_elem_props.get_runtime_id());
     let item = format!(
         "'{}' {} ({} | {} | {})",
-        root.get_name().unwrap_or_default(),
-        root.get_localized_control_type().unwrap_or_default(),
-        root.get_classname().unwrap_or_default(),
-        root.get_framework_id().unwrap_or_default(),
+        ui_elem_props.get_name(),
+        ui_elem_props.get_localized_control_type(),
+        ui_elem_props.get_classname(),
+        ui_elem_props.get_framework_id(),
         runtime_id
     );
-    let ui_elem_props = SaveUIElement::new(root.clone(), 0, 999);
-    let mut tree = UITreeMap::new(item, runtime_id.clone(), ui_elem_props.clone());
+    let mut tree = UITreeMap::new(item, runtime_id.clone(), ());
+
     let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, 0);
     ui_elements.push(ui_elem_in_tree);
-    let root_ct_tag = root.get_control_type().map(|ct| ct.as_str()).unwrap_or("Pane");
-    xml_writer.set_root(XMLDomNode::new(root_ct_tag));
-    let Some(xml_root) = xml_writer.get_root_mut() else {
-        error!("XML root not initialized after set_root");
-        let _ = tx.send(Err(UITreeError::XmlError("XML root not initialized".to_string())));
-        return;
-    };
-    xml_root.set_attribute("RtID", runtime_id.as_str());
-    xml_root.set_attribute(
-        "Name",
-        root.get_name()
-            .unwrap_or("No name defined".to_string())
-            .as_str(),
-    );
-    let control_type = root.get_control_type();
-    match control_type {
-        Ok(ct) => {
-            xml_root.set_attribute("ControlType", ct.as_str());
-        }
-        Err(_) => {
-            xml_root.set_attribute("ControlType", "No control type defined");
-        }
-    }
 
     let mut tree_path = String::new();
 
     if let Ok(_first_child) = walker.get_first_child(&root) {
-        // iterate over all child ui elements
-        // FIXME: the z-order ist not correct in the parallel version, needs analysis and fixing
         get_element(
             &mut tree,
             &mut ui_elements,
             0,
             &walker,
             &root,
-            xml_root,
+            &mut xml_writer,
             0,
             0,
             Some(1_usize),
@@ -677,19 +579,10 @@ pub fn get_all_elements_par_xml(
         );
     }
 
-    // creating the XML DOM tree
-    let xml_dom_tree = match xml_writer.to_string() {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Failed to serialize XML DOM tree: {}", e);
-            let _ = tx.send(Err(UITreeError::XmlError(e.to_string())));
-            return;
-        }
-    };
+    let xml_dom_tree = String::from_utf8(xml_writer.into_inner().into_inner()).unwrap_or_default();
 
-    // sorting the elements by z_order first, then by ascending bounding rect size within each z-order
     info!("Sorting UI elements by z-order and size...");
-    ui_elements.sort_by(|a, b| {
+    ui_elements.sort_unstable_by(|a, b| {
         a.get_element_props()
             .get_z_order()
             .cmp(&b.get_element_props().get_z_order())
@@ -700,15 +593,12 @@ pub fn get_all_elements_par_xml(
             )
     });
 
-    // pack the tree and ui_elements vector into a single struct
     let mut ui_tree = UITree::new(tree, xml_dom_tree, ui_elements);
     debug!(
         "This is the top level tree we are processing:\n{}",
         ui_tree.get_xml_dom_tree()
     );
 
-    // special handling to skip duplicate root node in processing
-    // take the frist child of the root instead of the root itself
     let root_idx = ui_tree.get_tree().root();
     let root_first_child_idx = match ui_tree.get_tree().children(root_idx).first() {
         None => {
@@ -730,17 +620,15 @@ pub fn get_all_elements_par_xml(
     let mut child_elements = Vec::new();
     trace!("children to process in parallel: {}", child_indices.len());
     for &child_index in child_indices {
-        let child_node = ui_tree.get_tree().node(child_index);
-        let child_save_ui_elem = &child_node.data;
-        child_elements.push(child_save_ui_elem.get_element().clone());
+        let elem_pos = ui_tree.node_to_elem[child_index];
+        let child_save_ui_elem = ui_tree.ui_elements[elem_pos].get_element_props();
+        child_elements.push(child_save_ui_elem.clone());
     }
 
-    // Process child_elements in parallel to build the full tree
     let child_count = child_elements.len();
     let (tx_par, rx_par) = channel::<Result<UITree, UITreeError>>();
     let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
     for element in child_elements {
-        // Spawn a new thread for each element to process it in parallel
         let tx_par_clone = tx_par.clone();
         let calling_window_caption_n = calling_window_caption.clone();
         let target_window_caption_n = target_window_caption.clone();
@@ -759,10 +647,8 @@ pub fn get_all_elements_par_xml(
         });
         handles.push(handle);
     }
-    // Drop the original sender so recv returns Disconnected when all threads finish
     drop(tx_par);
 
-    // get the subtrees from the threads
     debug!("Collecting subtrees from {} threads...", child_count);
     let mut subtrees = Vec::new();
     for _ in 0..child_count {
@@ -781,7 +667,6 @@ pub fn get_all_elements_par_xml(
         }
     }
 
-    // ensure all threads have completed
     trace!("Waiting for all threads to complete...");
     for handle in handles {
         if let Err(e) = handle.join() {
@@ -789,7 +674,6 @@ pub fn get_all_elements_par_xml(
         }
     }
 
-    // append the subtrees to the main tree
     debug!("Appending {} subtrees to the main tree...", subtrees.len());
     for subtree in subtrees {
         match ui_tree.append_or_replace_subtree(ui_tree.get_tree().root(), subtree) {
@@ -801,7 +685,6 @@ pub fn get_all_elements_par_xml(
         debug!("UI tree has now {} elements", ui_tree.get_elements().len());
     }
 
-    // send the tree containing all UI elements back to the main thread
     info!(
         "Sending UI tree with {} elements to the main thread...",
         ui_tree.get_elements().len()
@@ -818,12 +701,12 @@ pub fn get_all_elements_par_xml(
 
 #[allow(clippy::too_many_arguments)]
 fn get_element(
-    tree: &mut UITreeMap<SaveUIElement>,
+    tree: &mut UITreeMap<()>,
     ui_elements: &mut Vec<UIElementInTree>,
     parent: usize,
     walker: &UITreeWalker,
     element: &UIElement,
-    xml_dom_node: &mut XMLDomNode,
+    xml_writer: &mut Writer<Cursor<Vec<u8>>>,
     level: usize,
     mut z_order: usize,
     max_depth: Option<usize>,
@@ -849,10 +732,8 @@ fn get_element(
         trace!("Skipping element with caption: {}", caption);
         return;
     }
-    // Track tree_path length so we can restore it before returning
     let prev_tree_path_len = tree_path.len();
 
-    // check for target window caption in the tree path if level is not zero
     if level > 0 {
         let name = if element
             .get_name()
@@ -883,59 +764,41 @@ fn get_element(
         }
     }
 
-    let runtime_id = format_runtime_id(&element.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]));
+    let effective_z_order = if level == 0 { 999 } else { z_order };
+    let ui_elem_props = SaveUIElement::new(element, level, effective_z_order);
+    let runtime_id = format_runtime_id(ui_elem_props.get_runtime_id());
     let item = format!(
         "'{}' {} ({} | {} | {})",
-        element.get_name().unwrap_or_default(),
-        element.get_localized_control_type().unwrap_or_default(),
-        element.get_classname().unwrap_or_default(),
-        element.get_framework_id().unwrap_or_default(),
+        ui_elem_props.get_name(),
+        ui_elem_props.get_localized_control_type(),
+        ui_elem_props.get_classname(),
+        ui_elem_props.get_framework_id(),
         runtime_id
     );
-    let ui_elem_props = if level == 0 {
-        SaveUIElement::new(element.clone(), level, 999)
-    } else {
-        SaveUIElement::new(element.clone(), level, z_order)
-    };
 
-    let parent = tree.add_child(
-        parent,
-        item.as_str(),
-        runtime_id.as_str(),
-        ui_elem_props.clone(),
-    );
+    let parent = tree.add_child(parent, item.as_str(), runtime_id.as_str(), ());
+
+    let control_type_tag = if ui_elem_props.get_control_type().is_empty() {
+        "Unknown".to_string()
+    } else {
+        ui_elem_props.get_control_type().clone()
+    };
+    let mut start = BytesStart::new(&control_type_tag);
+    start.push_attribute(("RtID", runtime_id.as_str()));
+    let z_order_str = effective_z_order.to_string();
+    start.push_attribute(("z-order", z_order_str.as_str()));
+    start.push_attribute(("Name", ui_elem_props.get_name().as_str()));
+    if ui_elem_props.get_control_type().is_empty() {
+        start.push_attribute(("ControlType", "No control type defined"));
+    } else {
+        start.push_attribute(("ControlType", ui_elem_props.get_control_type().as_str()));
+    }
+    let _ = xml_writer.write_event(Event::Start(start));
+
     let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, parent);
     ui_elements.push(ui_elem_in_tree);
 
-    let control_type_tag = element.get_control_type().map(|ct| ct.as_str()).unwrap_or("Unknown");
-    let curr_xml_dom_node = xml_dom_node.add_child(XMLDomNode::new(control_type_tag));
-    curr_xml_dom_node.set_attribute("RtID", runtime_id.as_str());
-    if level == 0 {
-        // manually setting the z_order for the root element
-        curr_xml_dom_node.set_attribute("z-order", "999");
-    } else {
-        curr_xml_dom_node.set_attribute("z-order", z_order.to_string().as_str());
-    }
-    curr_xml_dom_node.set_attribute(
-        "Name",
-        element
-            .get_name()
-            .unwrap_or("No name defined".to_string())
-            .as_str(),
-    );
-    let control_type = element.get_control_type();
-    match control_type {
-        Ok(ct) => {
-            curr_xml_dom_node.set_attribute("ControlType", ct.as_str());
-        }
-        Err(_) => {
-            curr_xml_dom_node.set_attribute("ControlType", "No control type defined");
-        }
-    }
-
-    // Walking the children of the current element
     if let Ok(child) = walker.get_first_child(element) {
-        // getting child elements
         trace!(
             "Found child element: {}",
             child.get_name().unwrap_or("Unknown".to_string())
@@ -946,7 +809,7 @@ fn get_element(
             parent,
             walker,
             &child,
-            curr_xml_dom_node,
+            xml_writer,
             level + 1,
             z_order,
             max_depth,
@@ -955,9 +818,7 @@ fn get_element(
             tree_path,
         );
         let mut next = child;
-        // walking siblings
         while let Ok(sibling) = walker.get_next_sibling(&next) {
-            // incrementing z_order for each sibling
             if level + 1 == 1 {
                 z_order += 1;
             }
@@ -971,7 +832,7 @@ fn get_element(
                 parent,
                 walker,
                 &sibling,
-                curr_xml_dom_node,
+                xml_writer,
                 level + 1,
                 z_order,
                 max_depth,
@@ -982,6 +843,7 @@ fn get_element(
             next = sibling;
         }
     }
-    // Restore tree_path to its state before this call
+
+    let _ = xml_writer.write_event(Event::End(BytesEnd::new(&control_type_tag)));
     tree_path.truncate(prev_tree_path_len);
 }

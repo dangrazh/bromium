@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "bromium"
-version = "0.6.4"
+version = "0.7.0"
 dependencies = [
  "bromium-common",
  "chrono",
@@ -5191,6 +5191,7 @@ dependencies = [
  "bromium-common",
  "chrono",
  "log",
+ "quick-xml 0.38.4",
  "thiserror 2.0.12",
  "uiautomation",
  "xmlutil",

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use log::{LevelFilter, Metadata, Record};
 use pyo3::prelude::*;
 use std::env;
@@ -6,6 +5,24 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+pub trait FromStrLevelFilter {
+    fn from_str(level_str: &str) -> LevelFilter;
+}
+
+impl FromStrLevelFilter for LevelFilter {
+    fn from_str(level_str: &str) -> Self {
+        match level_str.to_lowercase().as_str() {
+            "off" => LevelFilter::Off,
+            "error" => LevelFilter::Error,
+            "warn" => LevelFilter::Warn,
+            "info" => LevelFilter::Info,
+            "debug" => LevelFilter::Debug,
+            "trace" => LevelFilter::Trace,
+            _ => LevelFilter::Info,
+        }
+    }
+}
 
 struct LogFileState {
     path: PathBuf,
@@ -73,7 +90,7 @@ impl log::Log for BromiumLogger {
                 timestamp,
                 record.level(),
                 record.args(),
-                record.module_path().unwrap_or("soure module unknown"),
+                record.module_path().unwrap_or("source module unknown"),
                 record.line().unwrap_or(0)
             );
 
@@ -312,4 +329,97 @@ pub fn reset_log_file() -> PyResult<()> {
         return Err(pyo3::exceptions::PyValueError::new_err("No log file set"));
     }
     Ok(())
+}
+
+// ─── Module-level #[pyfunction] wrappers (R-02) ───────────────────────────────
+// These expose the same functionality as Bromium static methods but as
+// proper module-level functions: `bromium.init_logging(...)` etc.
+
+/// Initialize the bromium logging system.
+///
+/// Parameters:
+///     log_path (str | None): Directory for log files. Defaults to ~/.bromium.
+///     log_level (str | None): One of "Off","Error","Warn","Info","Debug","Trace". Defaults to "Info".
+///     enable_console (bool | None): Enable console output. Defaults to False.
+///     enable_file (bool | None): Enable file output. Defaults to True.
+#[pyfunction]
+#[pyo3(name = "init_logging")]
+pub fn py_init_logging(
+    log_path: Option<&str>,
+    log_level: Option<&str>,
+    enable_console: Option<bool>,
+    enable_file: Option<bool>,
+) -> PyResult<()> {
+    let log_dir = log_path.map(std::path::PathBuf::from);
+    let log_level_parsed: LevelFilter = match log_level {
+        Some(level_str) => LevelFilter::from_str(level_str),
+        None => LevelFilter::Info,
+    };
+    init_logger(log_dir, log_level_parsed, enable_console, enable_file);
+    log::info!("Bromium logging initialized.");
+    Ok(())
+}
+
+/// Get the current bromium version string.
+#[pyfunction]
+#[pyo3(name = "get_version")]
+pub fn py_get_version() -> PyResult<String> {
+    Ok(env!("CARGO_PKG_VERSION").to_string())
+}
+
+/// Get the current log file path.
+#[pyfunction]
+#[pyo3(name = "get_log_file")]
+pub fn py_get_log_file() -> PyResult<String> {
+    get_log_file()
+}
+
+/// Set the full path for the log file. Creates parent directories if needed.
+#[pyfunction]
+#[pyo3(name = "set_log_file")]
+pub fn py_set_log_file(log_file: &str) -> PyResult<()> {
+    set_log_file(log_file.to_string())
+}
+
+/// Get the current log level as a string.
+#[pyfunction]
+#[pyo3(name = "get_log_level")]
+pub fn py_get_log_level() -> PyResult<String> {
+    get_log_level()
+}
+
+/// Set the log level. Accepts a LogLevel enum value or a string.
+#[pyfunction]
+#[pyo3(name = "set_log_level")]
+pub fn py_set_log_level(log_level: &str) -> PyResult<()> {
+    let level = LogLevel::from(log_level);
+    set_log_level(level)
+}
+
+/// Set a custom directory for log files.
+#[pyfunction]
+#[pyo3(name = "set_log_directory")]
+pub fn py_set_log_directory(log_directory: &str) -> PyResult<()> {
+    set_log_directory(log_directory.to_string())
+}
+
+/// Enable or disable console logging.
+#[pyfunction]
+#[pyo3(name = "enable_console_logging")]
+pub fn py_enable_console_logging(enable: bool) -> PyResult<()> {
+    enable_console_logging(enable)
+}
+
+/// Enable or disable file logging.
+#[pyfunction]
+#[pyo3(name = "enable_file_logging")]
+pub fn py_enable_file_logging(enable: bool) -> PyResult<()> {
+    enable_file_logging(enable)
+}
+
+/// Clear all contents from the current log file.
+#[pyfunction]
+#[pyo3(name = "reset_log_file")]
+pub fn py_reset_log_file() -> PyResult<()> {
+    reset_log_file()
 }

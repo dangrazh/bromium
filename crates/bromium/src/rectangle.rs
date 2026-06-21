@@ -14,13 +14,13 @@ use uitree::UIElementInTreeXML;
 
 pub fn get_point_bounding_rect<'a>(
     point: &'a POINT,
-    ui_elements: &'a Vec<UIElementInTreeXML>,
+    ui_elements: &'a [UIElementInTreeXML],
 ) -> Option<&'a UIElementInTreeXML> {
     // let mut cntr = 0;
     for element in ui_elements {
         // cntr += 1;
         let bounding_rect = &element.get_element_props().get_bounding_rectangle();
-        if is_inside_rectancle(bounding_rect, point.x, point.y) {
+        if is_inside_rectangle(bounding_rect, point.x, point.y) {
             // println!("point: {{ x: {}, y: {} }} searched elements: {} / Found element: {{ name: '{}', control_type: '{}' bounding_rect: {} }}", point.x, point.y, cntr, element.name, element.control_type, element.bounding_rect);
             return Some(element);
         }
@@ -29,7 +29,7 @@ pub fn get_point_bounding_rect<'a>(
     None
 }
 
-pub fn is_inside_rectancle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> bool {
+pub fn is_inside_rectangle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> bool {
     x >= rect.get_left() && x <= rect.get_right() && y >= rect.get_top() && y <= rect.get_bottom()
 }
 

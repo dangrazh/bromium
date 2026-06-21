@@ -17,7 +17,7 @@ use uitree::UIElementInTreeXML;
 //       as the rectangles are sorted by size
 pub fn get_point_bounding_rect<'a>(
     point: &'a POINT,
-    ui_elements: &'a Vec<UIElementInTreeXML>,
+    ui_elements: &'a [UIElementInTreeXML],
 ) -> Option<&'a UIElementInTreeXML> {
     // pub fn get_point_bounding_rect(point: &Pos2, ui_elements: &Vec<UIElementProps>) -> Option<&UIElementProps> {
     // printfmt!("Searching for element at point: {{ x: {}, y: {} }} in tree with {} elements.", point.x, point.y, ui_elements.len());
@@ -32,7 +32,7 @@ pub fn get_point_bounding_rect<'a>(
             .get_element_props()
             .get_element()
             .get_bounding_rectangle();
-        if is_inside_rectancle(rect, point.x, point.y) {
+        if is_inside_rectangle(rect, point.x, point.y) {
             // printfmt!("point: {{ x: {}, y: {} }} searched elements: {} / Found element: {{ name: '{}', control_type: '{}' bounding_rect: {} }}", point.x, point.y, cntr, element.get_element_props().get_element().get_name(), element.get_element_props().get_element().get_control_type(), element.get_element_props().get_element().get_bounding_rectangle());
             return Some(element);
         }
@@ -41,7 +41,7 @@ pub fn get_point_bounding_rect<'a>(
     None
 }
 
-pub fn is_inside_rectancle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> bool {
+pub fn is_inside_rectangle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> bool {
     x >= rect.get_left() && x <= rect.get_right() && y >= rect.get_top() && y <= rect.get_bottom()
 }
 

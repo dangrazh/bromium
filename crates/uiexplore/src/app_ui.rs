@@ -1129,7 +1129,10 @@ impl eframe::App for UIExplorer {
                         self.app_mode = AppMode::Normal(LastRefresh {
                             time: std::time::Instant::now(),
                         });
-                        self.set_status(format!("UI Tree refresh failed: {}", e), Duration::seconds(5));
+                        self.set_status(
+                            format!("UI Tree refresh failed: {}", e),
+                            Duration::seconds(5),
+                        );
                         return;
                     }
                     Err(_) => {
@@ -1168,7 +1171,7 @@ impl eframe::App for UIExplorer {
     }
 }
 
-fn event_summary(event: &egui::Event, ui_elements: &Vec<UIElementInTreeXML>) -> String {
+fn event_summary(event: &egui::Event, ui_elements: &[UIElementInTreeXML]) -> String {
     match event {
         egui::Event::PointerMoved { .. } => "PointerMoved { .. }".to_owned(),
         egui::Event::MouseMoved { .. } => {
