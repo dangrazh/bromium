@@ -36,14 +36,17 @@ fn main() -> eframe::Result {
     printfmt!("Spawned separate thread to get ui tree");
 
     printfmt!("displaying start screen now");
-    launch_start_screen();
+    let start_screen_pid = launch_start_screen();
 
     let ui_tree = rx
         .recv()
         .expect("Failed to receive UI tree from thread")
         .expect("UI tree build failed");
 
-    signal_file::create_signal_file().unwrap();
+    // Signal the start_screen child (if launched) to close
+    if let Some(pid) = start_screen_pid {
+        let _ = signal_file::create_signal_file_for_pid(pid);
+    }
     printfmt!("UI Tree retrieved, setting up UIExplorer app...");
 
     // debugging only...
@@ -197,11 +200,16 @@ fn get_screen_scale_factor() -> f32 {
 }
 
 #[allow(dead_code)]
-fn launch_start_screen() {
-    let msg = match std::process::Command::new("start_screen.exe").spawn() {
-        Ok(_) => "Start Screen successfully launched",
-        Err(_) => "Failed to launch Start Screen",
-    };
-
-    printfmt!("{}", msg);
+fn launch_start_screen() -> Option<u32> {
+    match std::process::Command::new("start_screen.exe").spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            printfmt!("Start Screen successfully launched (pid={})", pid);
+            Some(pid)
+        }
+        Err(_) => {
+            printfmt!("Failed to launch Start Screen");
+            None
+        }
+    }
 }

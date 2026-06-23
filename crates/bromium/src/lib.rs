@@ -22,6 +22,8 @@ fn bromium(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<windriver::WinDriver>()?;
     m.add_class::<windriver::Element>()?;
     m.add_class::<windriver::ElementIterator>()?;
+    m.add_class::<screen_context::ScreenContext>()?;
+    m.add_class::<screen_context::ScreenInfo>()?;
     m.add_class::<logging::LogLevel>()?;
 
     // Custom exceptions

@@ -1,8 +1,8 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pyo3::prelude::*;
 
@@ -27,6 +27,9 @@ use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use uiautomation::UIElement;
 
 use log::{debug, error, info, trace, warn};
+
+/// Monotonic counter for unique screenshot filenames.
+static SCREENSHOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[pyclass]
 #[derive(Debug, Clone)]
@@ -485,10 +488,15 @@ impl ElementIterator {
     }
 }
 
+/// Default timeout (in seconds) for tree-construction `recv_timeout` calls.
+const DEFAULT_TREE_TIMEOUT_SECS: u64 = 120;
+
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct WinDriver {
     timeout_ms: u64,
+    /// Maximum seconds to wait for a tree-construction thread to finish.
+    tree_timeout_secs: u64,
     ui_tree: UITreeXML,
     window_title: Option<String>,
     /// Cancellation flag for the most recently spawned tree-construction thread.
@@ -554,7 +562,7 @@ impl WinDriver {
         info!("Spawned separate thread to get ui tree");
 
         let ui_tree: UITreeXML = rx
-            .recv_timeout(Duration::from_secs(120))
+            .recv_timeout(Duration::from_secs(DEFAULT_TREE_TIMEOUT_SECS))
             .map_err(|e| {
                 // Signal the orphaned thread to stop
                 cancel_flag.store(true, Ordering::Relaxed);
@@ -575,6 +583,7 @@ impl WinDriver {
 
         let driver = WinDriver {
             timeout_ms,
+            tree_timeout_secs: DEFAULT_TREE_TIMEOUT_SECS,
             ui_tree,
             window_title,
             cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -609,6 +618,18 @@ impl WinDriver {
     #[setter]
     pub fn set_timeout_ms(&mut self, timeout_ms: u64) {
         self.timeout_ms = timeout_ms;
+    }
+
+    /// Maximum seconds to wait for UI tree construction (default: 120).
+    #[getter]
+    pub fn tree_timeout_secs(&self) -> u64 {
+        self.tree_timeout_secs
+    }
+
+    /// Set the tree-construction timeout in seconds.
+    #[setter]
+    pub fn set_tree_timeout_secs(&mut self, secs: u64) {
+        self.tree_timeout_secs = secs;
     }
 
     /// Number of UI elements currently in the tree.
@@ -792,6 +813,7 @@ impl WinDriver {
             if effective_timeout > 0 {
                 debug!("Element not found, retrying for {} ms.", effective_timeout);
                 let start_time = std::time::Instant::now();
+                let tree_timeout = Duration::from_secs(self.tree_timeout_secs);
                 while start_time.elapsed().as_millis() < effective_timeout as u128 {
                     let window_title_filter = self.window_title.clone();
                     // Cancel any previously orphaned tree-construction thread
@@ -812,7 +834,7 @@ impl WinDriver {
                                 cancel_clone,
                             );
                         });
-                        let result = rx.recv_timeout(Duration::from_secs(120));
+                        let result = rx.recv_timeout(tree_timeout);
                         if result.is_err() {
                             cancel_flag.store(true, Ordering::Relaxed);
                         }
@@ -980,7 +1002,12 @@ impl WinDriver {
             .name()
             .map(normalized)
             .unwrap_or_else(|_| "unknown".to_string());
-        let filename = format!("monitor-{}.png", monitor_name);
+        let epoch_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let seq = SCREENSHOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let filename = format!("monitor-{}-{}-{}.png", monitor_name, epoch_secs, seq);
         let filenameandpath = out_dir.join(filename);
         match image.save(&filenameandpath) {
             Ok(_) => {
@@ -1052,7 +1079,7 @@ impl WinDriver {
         info!("Spawned separate thread to refresh ui tree");
 
         let ui_tree = rx
-            .recv_timeout(Duration::from_secs(120))
+            .recv_timeout(Duration::from_secs(self.tree_timeout_secs))
             .map_err(|e| {
                 // Signal the orphaned thread to stop
                 cancel_flag.store(true, Ordering::Relaxed);
@@ -1096,7 +1123,7 @@ impl WinDriver {
         });
 
         let ui_tree = rx
-            .recv_timeout(Duration::from_secs(120))
+            .recv_timeout(Duration::from_secs(self.tree_timeout_secs))
             .map_err(|e| {
                 // Signal the orphaned thread to stop
                 cancel_flag.store(true, Ordering::Relaxed);

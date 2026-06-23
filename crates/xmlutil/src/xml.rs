@@ -240,7 +240,7 @@ impl XMLDomWriter {
         self.root.as_mut()
     }
 
-    pub fn to_string(&self) -> Result<String, Error> {
+    pub fn to_xml_string(&self) -> Result<String, Error> {
         let mut writer = XMLWriter::new();
         if let Some(ref root) = self.root {
             // special handling to eliminate duplicate root node from the XML output

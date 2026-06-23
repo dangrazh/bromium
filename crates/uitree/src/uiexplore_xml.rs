@@ -46,11 +46,23 @@ impl UITree {
     }
 
     fn build_node_to_elem(tree: &UITreeMap<()>, elements: &[UIElementInTree]) -> Vec<usize> {
+        // Build a map from runtime-ID → element position.
+        // Skip empty runtime IDs to avoid collisions (CF-28): elements with
+        // empty IDs are resolved by tree-index match below.
         let mut rtid_to_pos: crate::UIHashMap<String, usize> = crate::UIHashMap::default();
         for (pos, elem) in elements.iter().enumerate() {
             let rtid = format_runtime_id(elem.get_element_props().get_runtime_id());
-            rtid_to_pos.insert(rtid, pos);
+            if !rtid.is_empty() {
+                rtid_to_pos.insert(rtid, pos);
+            }
         }
+        // Build a secondary map: tree-index → element position for elements
+        // whose tree_index field matches. This handles empty-runtime-ID nodes.
+        let mut idx_to_pos: crate::UIHashMap<usize, usize> = crate::UIHashMap::default();
+        for (pos, elem) in elements.iter().enumerate() {
+            idx_to_pos.insert(elem.get_tree_index(), pos);
+        }
+
         let mut map = vec![0; tree.node_count()];
         for (i, slot) in map.iter_mut().enumerate() {
             // Skip dead (tombstone) nodes — leave their mapping at 0
@@ -58,6 +70,8 @@ impl UITree {
                 continue;
             }
             if let Some(&pos) = rtid_to_pos.get(&tree.node(i).runtime_id) {
+                *slot = pos;
+            } else if let Some(&pos) = idx_to_pos.get(&i) {
                 *slot = pos;
             }
         }

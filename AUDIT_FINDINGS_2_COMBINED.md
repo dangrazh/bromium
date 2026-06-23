@@ -662,12 +662,12 @@ Improve the public API surface and developer experience.
 
 | Step | Action | Finding | Effort |
 |------|--------|---------|--------|
-| 18 | **R-18** Register `ScreenContext`/`ScreenInfo` in PyO3 module | CF-09 | Trivial |
-| 19 | **R-19** Make tree-construction timeout configurable | CF-29 | Small |
-| 20 | **R-20** Generate unique screenshot filenames | CF-17 | Small |
-| 21 | **R-21** Rename `XMLDomWriter::to_string` | CF-27 | Trivial |
-| 22 | **R-22** Handle runtime ID collisions in `node_to_elem` | CF-28 | Small |
-| 23 | **R-29** Replace global signal filename with per-process path | CF-16 | Small |
+| 18 | ✅ | **R-18** Register `ScreenContext`/`ScreenInfo` in PyO3 module | CF-09 | Trivial |
+| 19 | ✅ | **R-19** Make tree-construction timeout configurable | CF-29 | Small |
+| 20 | ✅ | **R-20** Generate unique screenshot filenames | CF-17 | Small |
+| 21 | ✅ | **R-21** Rename `XMLDomWriter::to_string` | CF-27 | Trivial |
+| 22 | ✅ | **R-22** Handle runtime ID collisions in `node_to_elem` | CF-28 | Small |
+| 23 | ✅ | **R-29** Replace global signal filename with per-process path | CF-16 | Small |
 
 ### Phase 6 — Performance & Polish
 
