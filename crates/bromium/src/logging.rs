@@ -6,24 +6,6 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-pub trait FromStrLevelFilter {
-    fn from_str(level_str: &str) -> LevelFilter;
-}
-
-impl FromStrLevelFilter for LevelFilter {
-    fn from_str(level_str: &str) -> Self {
-        match level_str.to_lowercase().as_str() {
-            "off" => LevelFilter::Off,
-            "error" => LevelFilter::Error,
-            "warn" => LevelFilter::Warn,
-            "info" => LevelFilter::Info,
-            "debug" => LevelFilter::Debug,
-            "trace" => LevelFilter::Trace,
-            _ => LevelFilter::Info,
-        }
-    }
-}
-
 struct LogFileState {
     path: PathBuf,
     writer: BufWriter<File>,
@@ -78,7 +60,7 @@ fn get_default_log_file() -> PathBuf {
 
 impl log::Log for BromiumLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        let level = LOG_LEVEL.lock().unwrap();
+        let level = LOG_LEVEL.lock().unwrap_or_else(|e| e.into_inner());
         metadata.level() <= *level
     }
 
@@ -94,12 +76,12 @@ impl log::Log for BromiumLogger {
                 record.line().unwrap_or(0)
             );
 
-            if *LOG_TO_CONSOLE.lock().unwrap() {
+            if *LOG_TO_CONSOLE.lock().unwrap_or_else(|e| e.into_inner()) {
                 println!("{}", log_message);
             }
 
-            if *LOG_TO_FILE.lock().unwrap() {
-                let mut state = LOG_FILE.lock().unwrap();
+            if *LOG_TO_FILE.lock().unwrap_or_else(|e| e.into_inner()) {
+                let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
                 if state.is_none() {
                     *state = LogFileState::open(get_default_log_file());
                 }
@@ -112,7 +94,7 @@ impl log::Log for BromiumLogger {
     }
 
     fn flush(&self) {
-        if let Some(ref mut s) = *LOG_FILE.lock().unwrap() {
+        if let Some(ref mut s) = *LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()) {
             let _ = s.writer.flush();
         }
     }
@@ -190,10 +172,10 @@ pub fn init_logger(
 
     let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
     let log_file = log_path.join(format!("bromium_{}.log", timestamp));
-    *LOG_FILE.lock().unwrap() = LogFileState::open(log_file.clone());
+    *LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()) = LogFileState::open(log_file.clone());
 
-    *LOG_TO_CONSOLE.lock().unwrap() = enable_console.unwrap_or(false);
-    *LOG_TO_FILE.lock().unwrap() = enable_file.unwrap_or(true);
+    *LOG_TO_CONSOLE.lock().unwrap_or_else(|e| e.into_inner()) = enable_console.unwrap_or(false);
+    *LOG_TO_FILE.lock().unwrap_or_else(|e| e.into_inner()) = enable_file.unwrap_or(true);
 
     INIT.call_once(|| {
         log::set_logger(&LOGGER)
@@ -208,7 +190,7 @@ pub fn init_logger(
 }
 
 pub fn set_log_level_internal(level: LevelFilter) {
-    let mut log_level = LOG_LEVEL.lock().unwrap();
+    let mut log_level = LOG_LEVEL.lock().unwrap_or_else(|e| e.into_inner());
     *log_level = level;
     log::set_max_level(level);
 }
@@ -220,7 +202,7 @@ pub fn set_log_level(level: LogLevel) -> PyResult<()> {
 }
 
 pub fn get_log_level() -> PyResult<String> {
-    let level = LOG_LEVEL.lock().unwrap();
+    let level = LOG_LEVEL.lock().unwrap_or_else(|e| e.into_inner());
     Ok(format!("{:?}", *level))
 }
 
@@ -236,14 +218,14 @@ pub fn set_log_file(path: String) -> PyResult<()> {
     }
 
     {
-        let mut state = LOG_FILE.lock().unwrap();
+        let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref mut s) = *state {
             let _ = s.writer.flush();
         }
         *state = LogFileState::open(path_buf.clone());
     }
 
-    if *LOG_TO_FILE.lock().unwrap() {
+    if *LOG_TO_FILE.lock().unwrap_or_else(|e| e.into_inner()) {
         log::info!("Log file changed to: {}", path_buf.display());
     }
 
@@ -263,7 +245,7 @@ pub fn set_log_directory(dir_path: String) -> PyResult<()> {
     let log_file = dir_path_buf.join(format!("bromium_{}.log", timestamp));
 
     {
-        let mut state = LOG_FILE.lock().unwrap();
+        let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref mut s) = *state {
             let _ = s.writer.flush();
         }
@@ -277,7 +259,7 @@ pub fn set_log_directory(dir_path: String) -> PyResult<()> {
 }
 
 pub fn get_log_file() -> PyResult<String> {
-    let mut state = LOG_FILE.lock().unwrap();
+    let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
 
     if state.is_none() {
         *state = LogFileState::open(get_default_log_file());
@@ -290,7 +272,7 @@ pub fn get_log_file() -> PyResult<String> {
 }
 
 pub fn enable_console_logging(enable: bool) -> PyResult<()> {
-    *LOG_TO_CONSOLE.lock().unwrap() = enable;
+    *LOG_TO_CONSOLE.lock().unwrap_or_else(|e| e.into_inner()) = enable;
     log::info!(
         "Console logging {}",
         if enable { "enabled" } else { "disabled" }
@@ -300,14 +282,14 @@ pub fn enable_console_logging(enable: bool) -> PyResult<()> {
 
 pub fn enable_file_logging(enable: bool) -> PyResult<()> {
     if enable {
-        let mut state = LOG_FILE.lock().unwrap();
+        let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
         if state.is_none() {
             let default_path = get_default_log_file();
             *state = LogFileState::open(default_path);
         }
     }
 
-    *LOG_TO_FILE.lock().unwrap() = enable;
+    *LOG_TO_FILE.lock().unwrap_or_else(|e| e.into_inner()) = enable;
     log::info!(
         "File logging {}",
         if enable { "enabled" } else { "disabled" }
@@ -316,7 +298,7 @@ pub fn enable_file_logging(enable: bool) -> PyResult<()> {
 }
 
 pub fn reset_log_file() -> PyResult<()> {
-    let mut state = LOG_FILE.lock().unwrap();
+    let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
 
     if let Some(s) = state.take() {
         let path = s.path;
@@ -351,10 +333,9 @@ pub fn py_init_logging(
     enable_file: Option<bool>,
 ) -> PyResult<()> {
     let log_dir = log_path.map(std::path::PathBuf::from);
-    let log_level_parsed: LevelFilter = match log_level {
-        Some(level_str) => LevelFilter::from_str(level_str),
-        None => LevelFilter::Info,
-    };
+    let log_level_parsed: LevelFilter = log_level
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(LevelFilter::Info);
     init_logger(log_dir, log_level_parsed, enable_console, enable_file);
     log::info!("Bromium logging initialized.");
     Ok(())

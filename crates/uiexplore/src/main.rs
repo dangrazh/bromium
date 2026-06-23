@@ -1,7 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-mod macros;
-
 use bromium_common::printfmt;
 use windows::Win32::Foundation::{HANDLE, POINT};
 use windows::Win32::Graphics::Gdi::{MONITOR_FROM_FLAGS, MonitorFromPoint};
@@ -145,6 +143,7 @@ impl AppContext {
 }
 
 fn get_system_metrics() -> ScreenSize {
+    // SAFETY: GetSystemMetrics is a stateless Win32 query with no pointer arguments.
     unsafe {
         let x = GetSystemMetrics(SM_CXSCREEN);
         let y = GetSystemMetrics(SM_CYSCREEN);
@@ -157,6 +156,8 @@ fn get_system_metrics() -> ScreenSize {
 }
 
 fn get_screen_scale_factor() -> f32 {
+    // SAFETY: All Win32 handles are obtained from valid API calls within this block.
+    // `dpi_x`/`dpi_y` are valid stack-allocated u32s passed by pointer to GetDpiForMonitor.
     unsafe {
         // First we need to set the DPI awareness context to per monitor aware
         // This is required to get the correct DPI for the monitor

@@ -62,25 +62,25 @@ impl SaveUIElement {
         }
     }
 
-    pub fn get_name(&self) -> &String {
+    pub fn get_name(&self) -> &str {
         &self.name
     }
-    pub fn get_classname(&self) -> &String {
+    pub fn get_classname(&self) -> &str {
         &self.classname
     }
-    pub fn get_control_type(&self) -> &String {
+    pub fn get_control_type(&self) -> &str {
         &self.control_type
     }
-    pub fn get_localized_control_type(&self) -> &String {
+    pub fn get_localized_control_type(&self) -> &str {
         &self.localized_control_type
     }
-    pub fn get_framework_id(&self) -> &String {
+    pub fn get_framework_id(&self) -> &str {
         &self.framework_id
     }
     pub fn get_runtime_id(&self) -> &[i32] {
         &self.runtime_id
     }
-    pub fn get_automation_id(&self) -> &String {
+    pub fn get_automation_id(&self) -> &str {
         &self.automation_id
     }
     pub fn get_handle(&self) -> isize {
@@ -98,8 +98,8 @@ impl SaveUIElement {
     pub fn get_z_order(&self) -> usize {
         self.z_order
     }
-    pub fn get_xpath(&self) -> Option<&String> {
-        self.xpath.as_ref()
+    pub fn get_xpath(&self) -> Option<&str> {
+        self.xpath.as_deref()
     }
 
     // return reference to self to avoid
@@ -220,13 +220,13 @@ impl Default for SaveUIElement {
 }
 
 impl TryFrom<&SaveUIElement> for UIElement {
-    type Error = ();
+    type Error = crate::error::UITreeError;
 
     fn try_from(value: &SaveUIElement) -> Result<Self, Self::Error> {
-        if let Some(elem) = value.get_ui_automation_ui_element() {
-            Ok(elem)
-        } else {
-            Err(())
-        }
+        value
+            .get_ui_automation_ui_element()
+            .ok_or(crate::error::UITreeError::UIAutomation(
+                "could not resolve UIElement from SaveUIElement".to_string(),
+            ))
     }
 }

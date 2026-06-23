@@ -46,6 +46,8 @@ pub fn is_inside_rectangle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> 
 }
 
 pub fn draw_frame(rect: RECT, outline_width: i32) -> Result<()> {
+    // SAFETY: All GDI handles are checked for validity before use and cleaned up
+    // in reverse order. HWND(null) targets the desktop DC, which is always valid.
     unsafe {
         // Get DC and check for NULL
         let hdc = GetDC(Some(HWND(std::ptr::null_mut())));
@@ -109,6 +111,7 @@ pub fn draw_frame(rect: RECT, outline_width: i32) -> Result<()> {
 }
 
 pub fn clear_frame(rect: RECT) -> Result<()> {
+    // SAFETY: HWND(null) targets all windows; `rect` is a valid stack-allocated RECT.
     unsafe {
         // Force redraw of the region
         let _res = InvalidateRect(Some(HWND(std::ptr::null_mut())), Some(&rect), true);

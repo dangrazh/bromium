@@ -718,7 +718,6 @@ dependencies = [
  "bromium-common",
  "chrono",
  "display-info",
- "fs_extra",
  "log",
  "pyo3",
  "screen-capture",
@@ -6327,7 +6326,6 @@ version = "0.1.0"
 dependencies = [
  "bromium-common",
  "chrono",
- "uiautomation",
  "win_event_hook",
  "windows 0.61.3",
 ]
@@ -6693,7 +6691,6 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 name = "xmlutil"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "ariadne",
  "quick-xml 0.38.4",
  "roxmltree",

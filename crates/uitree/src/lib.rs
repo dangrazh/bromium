@@ -1,7 +1,5 @@
 pub type UIHashMap<K, V, S = std::hash::RandomState> = std::collections::HashMap<K, V, S>;
 
-mod macros;
-
 mod error;
 pub use error::UITreeError;
 
@@ -20,14 +18,14 @@ pub type UIElementInTreeXML = UIElementInTree;
 /// Backward-compatible alias — all three tree walkers now share one `UIElementInTree`.
 pub type UIElementInTreeIter = UIElementInTree;
 
-mod uiexplore;
-pub use uiexplore::{UITree, get_all_elements};
-
 mod uiexplore_xml;
-pub use uiexplore_xml::{UITree as UITreeXML, get_all_elements_par_xml, get_all_elements_xml};
+pub use uiexplore_xml::{UITree, get_all_elements_par_xml, get_all_elements_xml};
+
+/// Deprecated: use `UITree` directly.
+pub type UITreeXML = UITree;
+
+mod uiexplore;
+pub use uiexplore::get_all_elements;
 
 mod uiexplore_iter;
-pub use uiexplore_iter::{UITree as UITreeIter, get_all_elements_iterative};
-
-pub mod conversion;
-pub use conversion::{ConvertFromControlType, ConvertToControlType};
+pub use uiexplore_iter::get_all_elements_iterative;

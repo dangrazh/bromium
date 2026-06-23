@@ -1,12 +1,6 @@
-#![allow(unused)]
-
-use bromium_common::{get_ui_automation_instance, printfmt};
+use bromium_common::printfmt;
 
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread;
-
-use uiautomation::types::Handle;
-use uiautomation::{UIAutomation, UIElement};
 
 use win_event_hook::WinEventHook;
 pub use win_event_hook::events::{Event, NamedEvent};
@@ -20,7 +14,6 @@ pub struct WinEventMonitor {
     rx_channel: Receiver<WinEventInfo>,
     last_hwnd: HWND,
     mouse_hwnd: HWND,
-    uia: UIAutomation,
 }
 
 impl Default for WinEventMonitor {
@@ -31,79 +24,36 @@ impl Default for WinEventMonitor {
 
 impl WinEventMonitor {
     pub fn new() -> Self {
-        // The mouse cursor constant (0x0) to filter mouse events later on
         let mouse_hwnd: HWND = HWND::default();
-
-        // create the hook
         let (hook, rx) = create_hook();
-
         let last_hwnd: HWND = HWND::default();
-
-        // Initialize UIAutomation
-        let uia = get_ui_automation_instance()
-            .expect("Failed to create UIAutomation instance — COM may not be initialized");
 
         WinEventMonitor {
             hook,
             rx_channel: rx,
             last_hwnd,
             mouse_hwnd,
-            uia,
         }
     }
 
     pub fn check_for_events(&mut self) -> Vec<WinEvtMonitorEvent> {
-        // println!("Checking for events in WinEventMonitor");
         let mut output: Vec<WinEvtMonitorEvent> = Vec::new();
 
-        // Main event processing
-        let mut i = 0;
-        let mut name = "no name retrieved".to_string();
-        let mut rt_id: Vec<i32> = vec![0, 0, 0, 0];
-
-        // Check for new events — use peekable() to avoid consuming the first event
         let mut rx_iter = self.rx_channel.try_iter().peekable();
         if rx_iter.peek().is_none() {
-            // printfmt!("No WinEvents in channel");
             return output;
         }
 
-        // let mut cnt = 0;
         for event_info in rx_iter {
-            // cnt += 1;
             let hwnd = *event_info.hwnd;
             if hwnd.0 != self.mouse_hwnd.0 {
-                if self.last_hwnd.0 != hwnd.0 {
-                    self.last_hwnd = hwnd;
-
-                    // TODO: This is currently very unreliable, often fails to get the element from the hwnd
-                    // and sometimes even hangs the app. Needs more investigation. Potiential solution is to
-                    // run this loop continuously in a separate thread and cache the results in a vector.
-
-                    // let handle: Handle = Handle::from(hwnd.0 as isize);
-                    // let element: Result<UIElement, uiautomation::Error> = self.uia.element_from_handle(handle);
-                    // match element {
-                    //     Ok(e) => {
-                    //         name = e.get_name().unwrap_or("".to_string());
-                    //         rt_id = e.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]);
-                    //     }
-                    //     Err(_e) => {
-                    //         // name = format!("Failed to get element from handle: {:?}", e);
-                    //         name = "invalid hwnd".to_string();
-                    //     }
-                    // }
-                }
-
-                let evt_monitor_event = WinEvtMonitorEvent {
+                self.last_hwnd = hwnd;
+                output.push(WinEvtMonitorEvent {
                     event: event_info.event,
-                    hwnd: *event_info.hwnd,
-                    ui_element_name: name.clone(),
-                    ui_element_runtime_id: rt_id.clone(),
-                };
-                output.push(evt_monitor_event);
+                    hwnd,
+                });
             }
         }
-        // printfmt!("Processed {} WinEvents from channel", cnt);
         output
     }
 }
@@ -120,8 +70,6 @@ impl Drop for WinEventMonitor {
 pub struct WinEvtMonitorEvent {
     event: Event,
     hwnd: HWND,
-    ui_element_name: String,
-    ui_element_runtime_id: Vec<i32>,
 }
 
 impl WinEvtMonitorEvent {
@@ -131,14 +79,6 @@ impl WinEvtMonitorEvent {
 
     pub fn get_hwnd(&self) -> HWND {
         self.hwnd
-    }
-
-    pub fn get_ui_element_name(&self) -> String {
-        self.ui_element_name.clone()
-    }
-
-    pub fn get_ui_element_runtime_id(&self) -> Vec<i32> {
-        self.ui_element_runtime_id.clone()
     }
 }
 

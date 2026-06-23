@@ -5,6 +5,14 @@ use xee_xpath::context::StaticContextBuilder;
 use xee_xpath::error::Error;
 use xee_xpath::error::SourceSpan;
 
+#[derive(Debug, thiserror::Error)]
+enum XpathEvalError {
+    #[error("{0}")]
+    XPath(#[from] xee_xpath::error::Error),
+    #[error("{0}")]
+    NamespaceDecl(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct XpathQueryResult {
     item_xml: String,
@@ -72,12 +80,8 @@ impl XpathResult {
         self.success
     }
 
-    pub fn get_error_msg(&self) -> String {
-        let mut out: String = "".to_string();
-        if let Some(err_msg) = self.error_msg.as_ref() {
-            out = err_msg.clone();
-        }
-        out
+    pub fn get_error_msg(&self) -> &str {
+        self.error_msg.as_deref().unwrap_or("")
     }
 
     pub fn get_result_count(&self) -> usize {
@@ -132,7 +136,7 @@ fn execute_query(
     queries: &xee_xpath::Queries<'_>,
     documents: &mut xee_xpath::Documents,
     doc: Option<xee_xpath::DocumentHandle>,
-) -> Result<XpathResult, anyhow::Error> {
+) -> Result<XpathResult, XpathEvalError> {
     let mut no_result = XpathResult::new(false, None, 0, vec![XpathQueryResult::default()]);
 
     let sequence_query = queries.sequence(xpath);
@@ -185,7 +189,7 @@ fn execute_query(
 fn make_static_context_builder<'a>(
     default_namespace_uri: Option<&'a str>,
     namespaces: &'a [String],
-) -> anyhow::Result<StaticContextBuilder<'a>> {
+) -> Result<StaticContextBuilder<'a>, XpathEvalError> {
     let mut static_context_builder = xee_xpath::context::StaticContextBuilder::default();
     if let Some(default_namespace_uri) = default_namespace_uri {
         static_context_builder.default_element_namespace(default_namespace_uri);
@@ -194,11 +198,15 @@ fn make_static_context_builder<'a>(
         .iter()
         .map(|declaration| {
             let mut parts = declaration.splitn(2, '=');
-            let prefix = parts.next().ok_or(anyhow::anyhow!("missing prefix"))?;
-            let uri = parts.next().ok_or(anyhow::anyhow!("missing uri"))?;
+            let prefix = parts
+                .next()
+                .ok_or_else(|| XpathEvalError::NamespaceDecl("missing prefix".to_string()))?;
+            let uri = parts
+                .next()
+                .ok_or_else(|| XpathEvalError::NamespaceDecl("missing uri".to_string()))?;
             Ok((prefix, uri))
         })
-        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+        .collect::<Result<Vec<_>, XpathEvalError>>()?;
 
     static_context_builder.namespaces(namespaces);
     Ok(static_context_builder)

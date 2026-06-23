@@ -16,17 +16,20 @@ pub fn get_point_bounding_rect<'a>(
     point: &'a POINT,
     ui_elements: &'a [UIElementInTreeXML],
 ) -> Option<&'a UIElementInTreeXML> {
-    // let mut cntr = 0;
+    let mut best: Option<&UIElementInTreeXML> = None;
+    let mut best_area = i64::MAX;
     for element in ui_elements {
-        // cntr += 1;
         let bounding_rect = &element.get_element_props().get_bounding_rectangle();
         if is_inside_rectangle(bounding_rect, point.x, point.y) {
-            // println!("point: {{ x: {}, y: {} }} searched elements: {} / Found element: {{ name: '{}', control_type: '{}' bounding_rect: {} }}", point.x, point.y, cntr, element.name, element.control_type, element.bounding_rect);
-            return Some(element);
+            let area = (bounding_rect.get_right() as i64 - bounding_rect.get_left() as i64)
+                * (bounding_rect.get_bottom() as i64 - bounding_rect.get_top() as i64);
+            if area < best_area {
+                best_area = area;
+                best = Some(element);
+            }
         }
     }
-    // printfmt!("NO ELEMENT FOUND! Searched elements: {}", cntr);
-    None
+    best
 }
 
 pub fn is_inside_rectangle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> bool {
@@ -35,6 +38,8 @@ pub fn is_inside_rectangle(rect: &uiautomation::types::Rect, x: i32, y: i32) -> 
 
 #[allow(dead_code)]
 pub fn draw_frame(rect: RECT, outline_width: i32) -> Result<()> {
+    // SAFETY: All GDI handles are checked for validity before use and cleaned up
+    // in reverse order. HWND(null) targets the desktop DC, which is always valid.
     unsafe {
         // Get DC and check for NULL
         let hdc = GetDC(Some(HWND(std::ptr::null_mut())));
@@ -99,6 +104,7 @@ pub fn draw_frame(rect: RECT, outline_width: i32) -> Result<()> {
 
 #[allow(dead_code)]
 pub fn clear_frame(rect: RECT) -> Result<()> {
+    // SAFETY: HWND(null) targets all windows; `rect` is a valid stack-allocated RECT.
     unsafe {
         // Force redraw of the region
         let _res = InvalidateRect(Some(HWND(std::ptr::null_mut())), Some(&rect), true);

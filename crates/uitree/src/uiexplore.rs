@@ -1,111 +1,13 @@
 use crate::UITreeMap;
-use crate::common_types::{UIElementInTree, match_original_format};
+use crate::common_types::UIElementInTree;
 use crate::error::UITreeError;
 use crate::save_ui_element::SaveUIElement;
-use bromium_common::{format_runtime_id, format_runtime_id_dotted, printfmt};
+use crate::uiexplore_xml::UITree;
+use bromium_common::{format_runtime_id, printfmt};
 
 use std::sync::mpsc::Sender;
 use uiautomation::core::UIAutomation;
 use uiautomation::{UIElement, UITreeWalker};
-
-#[derive(Debug, Clone)]
-pub struct UITree {
-    tree: UITreeMap<()>,
-    ui_elements: Vec<UIElementInTree>,
-    node_to_elem: Vec<usize>,
-}
-
-impl UITree {
-    pub fn new(tree: UITreeMap<()>, ui_elements: Vec<UIElementInTree>) -> Self {
-        let node_to_elem = Self::build_node_to_elem(&tree, &ui_elements);
-        UITree {
-            tree,
-            ui_elements,
-            node_to_elem,
-        }
-    }
-
-    fn build_node_to_elem(tree: &UITreeMap<()>, elements: &[UIElementInTree]) -> Vec<usize> {
-        let mut map = vec![0; tree.node_count()];
-        for (pos, elem) in elements.iter().enumerate() {
-            let ti = elem.get_tree_index();
-            if ti < map.len() {
-                map[ti] = pos;
-            }
-        }
-        map
-    }
-
-    pub fn get_tree(&self) -> &UITreeMap<()> {
-        &self.tree
-    }
-
-    pub fn get_elements(&self) -> &[UIElementInTree] {
-        &self.ui_elements
-    }
-
-    pub fn for_each<F>(&self, mut f: F)
-    where
-        F: FnMut(usize, &SaveUIElement),
-    {
-        self.tree.for_each(|idx, _| {
-            let elem_pos = self.node_to_elem[idx];
-            f(idx, self.ui_elements[elem_pos].get_element_props());
-        });
-    }
-
-    pub fn root(&self) -> usize {
-        self.tree.root()
-    }
-
-    pub fn children(&self, index: usize) -> &[usize] {
-        self.tree.children(index)
-    }
-
-    pub fn node(&self, index: usize) -> (&str, &SaveUIElement) {
-        let node = self.tree.node(index);
-        let elem_pos = self.node_to_elem[index];
-        (&node.name, self.ui_elements[elem_pos].get_element_props())
-    }
-
-    pub fn get_xpath_for_element(&self, index: usize) -> String {
-        let path = self.get_xpath_raw_for_element(index);
-        match_original_format(&path)
-    }
-
-    fn get_xpath_raw_for_element(&self, index: usize) -> String {
-        let mut path = Vec::new();
-
-        let path_to_element = self.tree.get_path_to_element(index);
-        if path_to_element.is_empty() {
-            return "/".to_string();
-        }
-
-        for &node_index in path_to_element.iter() {
-            let elem_pos = self.node_to_elem[node_index];
-            let ui_elem_props = self.ui_elements[elem_pos].get_element_props();
-
-            let control_type = ui_elem_props.get_control_type();
-            let control_type_localized = ui_elem_props.get_localized_control_type();
-            let name = ui_elem_props.get_name();
-            let class_name = ui_elem_props.get_classname();
-            let automation_id = ui_elem_props.get_automation_id();
-
-            let bounding_rect = ui_elem_props.get_bounding_rectangle();
-            let left = bounding_rect.get_left();
-            let top = bounding_rect.get_top();
-            let right = bounding_rect.get_right();
-            let bottom = bounding_rect.get_bottom();
-            let width = right - left;
-            let height = bottom - top;
-
-            let runtime_id = format_runtime_id_dotted(ui_elem_props.get_runtime_id());
-            path.push(format!("/{}[LocalizedControlType=\"{}\"][ClassName=\"{}\"][Name=\"{}\"][AutomationId=\"{}\"][x={}][y={}][width={}][height={}][lx={}][ly={}][position()={}][RuntimeId=\"{}\"]\n", control_type, control_type_localized, class_name, name, automation_id, left, top, width, height, left, top, "", runtime_id));
-        }
-
-        path.join("").to_string()
-    }
-}
 
 pub fn get_all_elements(tx: Sender<Result<UITree, UITreeError>>, max_depth: Option<usize>) {
     let automation = match UIAutomation::new() {
@@ -171,7 +73,7 @@ pub fn get_all_elements(tx: Sender<Result<UITree, UITreeError>>, max_depth: Opti
             )
     });
 
-    let ui_tree = UITree::new(tree, ui_elements);
+    let ui_tree = UITree::new(tree, String::new(), ui_elements);
 
     printfmt!(
         "Sending UI tree with {} elements to the main thread...",

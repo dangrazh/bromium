@@ -169,12 +169,16 @@ pub struct ScreenContext {
     primary_screen: ScreenInfo,
 }
 
-#[allow(clippy::new_without_default)]
 #[pymethods]
 impl ScreenContext {
     #[new]
-    pub fn new() -> Self {
-        let displays = DisplayInfo::all().unwrap_or_default();
+    pub fn new() -> PyResult<Self> {
+        let displays = DisplayInfo::all().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to enumerate displays: {}",
+                e
+            ))
+        })?;
 
         let screens: Vec<ScreenInfo> = displays.into_iter().map(ScreenInfo::from).collect();
 
@@ -182,16 +186,17 @@ impl ScreenContext {
             .iter()
             .find(|screen| screen.is_primary)
             .cloned()
-            .unwrap_or_else(|| screens.first().cloned().expect("No screens found"));
+            .or_else(|| screens.first().cloned())
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("No screens found"))?;
 
-        Self {
+        Ok(Self {
             screens,
             primary_screen,
-        }
+        })
     }
 
     pub fn __repr__(&self) -> PyResult<String> {
-        PyResult::Ok(format!(
+        Ok(format!(
             "<ScreenContext primary_screen='{}' screens_count={}>",
             self.primary_screen.name,
             self.screens.len()

@@ -10,14 +10,13 @@ use crate::uiauto::{
     get_ui_element_by_runtimeid, invoke_click, select_item, set_value, supports_invoke,
     supports_select, supports_value,
 };
-use uitree::conversion::ConvertFromControlType;
 use uitree::{SaveUIElementXML, UITreeError, UITreeXML, get_all_elements_xml};
 
 use crate::app_control::launch_or_activate_application;
 
 use screen_capture::Monitor;
 
-use fs_extra::dir;
+use std::fs;
 
 use crate::logging;
 use windows::Win32::Foundation::{POINT, RECT};
@@ -25,7 +24,6 @@ use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use uiautomation::UIElement;
 
-use crate::logging::FromStrLevelFilter;
 use log::{debug, error, info, trace, warn};
 
 #[pyclass]
@@ -44,18 +42,17 @@ impl Bromium {
         // parse log directory if provided, otherwise default to None
         let log_dir = log_path.map(std::path::PathBuf::from);
         // parse log level if provided, otherwise default to Info
-        let log_level_parsed: log::LevelFilter = match log_level {
-            Some(level_str) => log::LevelFilter::from_str(level_str),
-            None => log::LevelFilter::Info,
-        };
+        let log_level_parsed: log::LevelFilter = log_level
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(log::LevelFilter::Info);
         debug!("Log level parsed: {:?}", log_level_parsed);
         logging::init_logger(log_dir, log_level_parsed, enable_console, enable_file);
         info!("Bromium logging initialized.");
-        PyResult::Ok(())
+        Ok(())
     }
 
     pub fn __repr__(&self) -> PyResult<String> {
-        PyResult::Ok("<Bromium>".to_string())
+        Ok("<Bromium>".to_string())
     }
 
     pub fn __str__(&self) -> PyResult<String> {
@@ -68,13 +65,13 @@ impl Bromium {
             timeout_ms
         );
         let driver = WinDriver::new(timeout_ms, window_title)?;
-        PyResult::Ok(driver)
+        Ok(driver)
     }
 
     #[staticmethod]
     pub fn get_version() -> PyResult<String> {
         let version = env!("CARGO_PKG_VERSION").to_string();
-        PyResult::Ok(version)
+        Ok(version)
     }
 
     #[staticmethod]
@@ -162,7 +159,7 @@ impl Element {
     }
 
     pub fn __repr__(&self) -> PyResult<String> {
-        PyResult::Ok(format!(
+        Ok(format!(
             "<Element name='{}' control_type='{}' handle={} runtime_id={:?} bounding_rectangle=({}, {}, {}, {})>",
             self.name,
             self.control_type,
@@ -176,7 +173,7 @@ impl Element {
     }
 
     pub fn __str__(&self) -> PyResult<String> {
-        PyResult::Ok(self.name.clone())
+        Ok(self.name.clone())
     }
 
     // ─── Properties (Pythonic attribute access) ───────────────────────────────
@@ -525,93 +522,6 @@ impl Element {
     }
 }
 
-impl From<&UIElement> for Element {
-    fn from(ui_element: &UIElement) -> Self {
-        debug!("Element::from called.");
-        let bound_rect_res = ui_element.get_bounding_rectangle();
-        let bounding_rect: RECT = match bound_rect_res {
-            Ok(bounding_rect_inner) => bounding_rect_inner.into(),
-            Err(e) => {
-                error!("Error getting bounding rectangle: {:?}", e);
-                RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                }
-            }
-        };
-
-        let native_handle: isize = ui_element
-            .get_native_window_handle()
-            .unwrap_or_default()
-            .into();
-
-        let control_type: String = match ui_element.get_control_type() {
-            Ok(ct) => ct.as_str().to_string(),
-            Err(_) => "Control Type undefined".to_string(),
-        };
-
-        Element {
-            name: ui_element.get_name().unwrap_or_default(),
-            xpath: String::new(),
-            handle: native_handle,
-            control_type,
-            runtime_id: ui_element.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]),
-            bounding_rectangle: RECT {
-                left: bounding_rect.left,
-                top: bounding_rect.top,
-                right: bounding_rect.right,
-                bottom: bounding_rect.bottom,
-            },
-        }
-    }
-}
-
-impl From<&SaveUIElementXML> for Element {
-    fn from(ui_element: &SaveUIElementXML) -> Self {
-        debug!("Element::from called.");
-        if let Some(props) = ui_element.get_ui_automation_ui_element() {
-            let bound_rect_res = props.get_bounding_rectangle();
-            let bounding_rect: RECT = match bound_rect_res {
-                Ok(bounding_rect_inner) => bounding_rect_inner.into(),
-                Err(e) => {
-                    error!("Error getting bounding rectangle: {:?}", e);
-                    RECT {
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        bottom: 0,
-                    }
-                }
-            };
-
-            let control_type: String = match props.get_control_type() {
-                Ok(ct) => ct.as_str().to_string(),
-                Err(_) => "Control Type undefined".to_string(),
-            };
-
-            let native_handle: isize = props.get_native_window_handle().unwrap_or_default().into();
-            Element {
-                name: props.get_name().unwrap_or_default(),
-                xpath: String::new(),
-                handle: native_handle,
-                control_type,
-                runtime_id: props.get_runtime_id().unwrap_or(vec![0, 0, 0, 0]),
-                bounding_rectangle: RECT {
-                    left: bounding_rect.left,
-                    top: bounding_rect.top,
-                    right: bounding_rect.right,
-                    bottom: bounding_rect.bottom,
-                },
-            }
-        } else {
-            error!("UIAutomation element properties not found in SaveUIElementXML");
-            Element::default()
-        }
-    }
-}
-
 impl Default for Element {
     fn default() -> Self {
         Element {
@@ -692,10 +602,10 @@ impl WinDriver {
     fn element_from_save_ui(props: &SaveUIElementXML) -> Element {
         let bounding_rect = props.get_bounding_rectangle();
         Element::new(
-            props.get_name().clone(),
-            props.get_xpath().cloned().unwrap_or_default(),
+            props.get_name().to_string(),
+            props.get_xpath().unwrap_or_default().to_string(),
             props.get_handle(),
-            props.get_control_type().clone(),
+            props.get_control_type().to_string(),
             props.get_runtime_id().to_vec(),
             (
                 bounding_rect.get_left(),
@@ -720,7 +630,7 @@ impl WinDriver {
 impl WinDriver {
     #[new]
     pub fn new(timeout_ms: u64, window_title: Option<String>) -> PyResult<Self> {
-        if let Some(title) = window_title.clone() {
+        if let Some(title) = window_title.as_deref() {
             debug!(
                 "Creating new WinDriver with timeout: {}ms and window title filter: '{}'",
                 timeout_ms, title
@@ -731,10 +641,10 @@ impl WinDriver {
 
         // get the ui tree in a separate thread
         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-        let window_title_1 = window_title.clone();
+        let window_title_clone = window_title.clone();
         thread::spawn(|| {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, Some(2), None, window_title_1);
+            get_all_elements_xml(tx, None, Some(2), None, window_title_clone);
         });
         info!("Spawned separate thread to get ui tree");
 
@@ -768,7 +678,7 @@ impl WinDriver {
     }
 
     pub fn __repr__(&self) -> PyResult<String> {
-        PyResult::Ok(format!(
+        Ok(format!(
             "<WinDriver timeout_ms={} element_count={} window_title={:?}>",
             self.timeout_ms,
             self.ui_tree.get_elements().len(),
@@ -893,9 +803,10 @@ impl WinDriver {
     pub fn get_cursor_pos(&self) -> PyResult<(i32, i32)> {
         debug!("WinDriver::get_cursor_pos called.");
         let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+        // SAFETY: `point` is a valid stack-allocated POINT; GetCursorPos writes into it.
         unsafe {
             let _res = GetCursorPos(&mut point);
-            PyResult::Ok((point.x, point.y))
+            Ok((point.x, point.y))
         }
     }
 
@@ -927,10 +838,10 @@ impl WinDriver {
             let control_type = ui_element_props.get_control_type();
 
             let element = Element::new(
-                ui_element_props.get_name().clone(),
+                ui_element_props.get_name().to_string(),
                 xpath,
                 ui_element_props.get_handle(),
-                control_type.clone(),
+                control_type.to_string(),
                 ui_element_props.get_runtime_id().to_vec(),
                 (
                     bounding_rect.get_left(),
@@ -943,7 +854,7 @@ impl WinDriver {
                 "Successfully found element at ({}, {}): {}",
                 x, y, element.name
             );
-            PyResult::Ok(element)
+            Ok(element)
         } else {
             warn!("No element found at coordinates ({}, {})", x, y);
             Err(ElementNotFoundError::new_err(format!(
@@ -958,6 +869,7 @@ impl WinDriver {
     /// default `timeout_ms` is used; pass `Some(0)` to disable retrying.
     pub fn get_element_by_xpath(
         &mut self,
+        py: Python<'_>,
         xpath: String,
         timeout_ms: Option<u64>,
     ) -> PyResult<Element> {
@@ -976,22 +888,35 @@ impl WinDriver {
                 let start_time = std::time::Instant::now();
                 while start_time.elapsed().as_millis() < effective_timeout as u128 {
                     let window_title_filter = self.window_title.clone();
-                    self.refresh_ui_tree(window_title_filter)?;
+                    let tree_result = py.allow_threads(|| {
+                        let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) =
+                            channel();
+                        thread::spawn(move || {
+                            get_all_elements_xml(tx, None, None, None, window_title_filter);
+                        });
+                        rx.recv_timeout(Duration::from_secs(120))
+                    });
+                    self.ui_tree = tree_result
+                        .map_err(|e| {
+                            TreeConstructionError::new_err(format!(
+                                "UI tree refresh failed (timeout or channel error): {}",
+                                e
+                            ))
+                        })?
+                        .map_err(|e| {
+                            TreeConstructionError::new_err(format!("UI tree refresh failed: {}", e))
+                        })?;
+
                     let ui_elem_retry = self.ui_tree.get_element_by_xpath(xpath.as_str());
                     if let Some(element) = ui_elem_retry {
                         debug!("Element found after refresh.");
-                        let name = element.get_name().clone();
-                        let xpath = xpath.clone();
-                        let handle = element.get_handle();
-                        let control_type = element.get_control_type();
-                        let runtime_id = element.get_runtime_id().to_vec();
                         let bounding_rectangle = element.get_bounding_rectangle();
                         return Ok(Element::new(
-                            name,
-                            xpath,
-                            handle,
-                            control_type.clone(),
-                            runtime_id,
+                            element.get_name().to_string(),
+                            xpath.clone(),
+                            element.get_handle(),
+                            element.get_control_type().to_string(),
+                            element.get_runtime_id().to_vec(),
                             (
                                 bounding_rectangle.get_left(),
                                 bounding_rectangle.get_top(),
@@ -1001,7 +926,7 @@ impl WinDriver {
                         ));
                     }
                     trace!("Element still not found after refresh, trying again.");
-                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    py.allow_threads(|| thread::sleep(Duration::from_millis(250)));
                 }
                 debug!(
                     "Element not found after retrying for {} ms.",
@@ -1021,19 +946,13 @@ impl WinDriver {
         }
 
         let element = ui_elem.unwrap();
-        // PyResult::Ok(element)
-        let name = element.get_name().clone();
-        let xpath = xpath.clone();
-        let handle = element.get_handle();
-        let control_type = element.get_control_type();
-        let runtime_id = element.get_runtime_id().to_vec();
         let bounding_rectangle = element.get_bounding_rectangle();
-        PyResult::Ok(Element::new(
-            name,
+        Ok(Element::new(
+            element.get_name().to_string(),
             xpath,
-            handle,
-            control_type.clone(),
-            runtime_id,
+            element.get_handle(),
+            element.get_control_type().to_string(),
+            element.get_runtime_id().to_vec(),
             (
                 bounding_rectangle.get_left(),
                 bounding_rectangle.get_top(),
@@ -1048,55 +967,47 @@ impl WinDriver {
 
         debug!("Searching for elements with xpath: {}", xpath);
         trace!("UI Tree has {} elements", self.ui_tree.get_elements().len());
-        let ui_elems = self.ui_tree.get_elements_by_xpath(xpath.as_str());
-        if ui_elems.is_none() {
+        let Some(elements) = self.ui_tree.get_elements_by_xpath(xpath.as_str()) else {
             debug!("No elements found for xpath: {}", xpath);
             return Err(ElementNotFoundError::new_err(format!(
                 "No elements found for xpath '{}'",
                 xpath
             )));
-        }
+        };
 
-        let elements = ui_elems.unwrap();
-        let mut results: Vec<Element> = Vec::new();
-        // PyResult::Ok(element)
-        for element in &elements {
-            trace!("Found element: {:?}", element);
-            let name = element.get_name().clone();
-            let xpath = xpath.clone();
-            let handle = element.get_handle();
-            let control_type = element.get_control_type();
-            let runtime_id = element.get_runtime_id().to_vec();
-            let bounding_rectangle = element.get_bounding_rectangle();
-            let elem = Element::new(
-                name,
-                xpath,
-                handle,
-                control_type.clone(),
-                runtime_id,
-                (
-                    bounding_rectangle.get_left(),
-                    bounding_rectangle.get_top(),
-                    bounding_rectangle.get_right(),
-                    bounding_rectangle.get_bottom(),
-                ),
-            );
-            results.push(elem);
-        }
-        PyResult::Ok(results)
+        let results: Vec<Element> = elements
+            .iter()
+            .map(|element| {
+                let bounding_rectangle = element.get_bounding_rectangle();
+                Element::new(
+                    element.get_name().to_string(),
+                    xpath.clone(),
+                    element.get_handle(),
+                    element.get_control_type().to_string(),
+                    element.get_runtime_id().to_vec(),
+                    (
+                        bounding_rectangle.get_left(),
+                        bounding_rectangle.get_top(),
+                        bounding_rectangle.get_right(),
+                        bounding_rectangle.get_bottom(),
+                    ),
+                )
+            })
+            .collect();
+        Ok(results)
     }
 
     pub fn pretty_print_ui_tree(&self) -> PyResult<()> {
         debug!("WinDriver::pretty_print_tree called.");
         self.ui_tree.pretty_print_tree();
-        PyResult::Ok(())
+        Ok(())
     }
 
     pub fn get_screen_context(&self) -> PyResult<ScreenContext> {
         debug!("WinDriver::get_screen_context called.");
 
-        let screen_context = ScreenContext::new();
-        PyResult::Ok(screen_context)
+        let screen_context = ScreenContext::new()?;
+        Ok(screen_context)
     }
 
     pub fn take_screenshot(&self) -> PyResult<String> {
@@ -1118,7 +1029,7 @@ impl WinDriver {
 
         let mut out_dir = std::env::temp_dir();
         out_dir = out_dir.join("bromium_screenshots");
-        match dir::create_all(out_dir.clone(), true) {
+        match fs::create_dir_all(&out_dir) {
             Ok(_) => {
                 info!("Created screenshot directory at {:?}", out_dir);
             }
@@ -1149,7 +1060,7 @@ impl WinDriver {
             .unwrap_or_else(|_| "unknown".to_string());
         let filename = format!("monitor-{}.png", monitor_name);
         let filenameandpath = out_dir.join(filename);
-        match image.save(filenameandpath.clone()) {
+        match image.save(&filenameandpath) {
             Ok(_) => {
                 let path_str = filenameandpath.to_string_lossy().to_string();
                 info!("Screenshot saved successfully to: {}", path_str);
@@ -1184,8 +1095,8 @@ impl WinDriver {
         match result {
             Ok(save_ui_elem) => {
                 info!("Application launched or activated successfully.");
-                let ui_elem = Element::from(&save_ui_elem);
-                PyResult::Ok(ui_elem)
+                let ui_elem = Self::element_from_save_ui(&save_ui_elem);
+                Ok(ui_elem)
             }
             Err(e) => {
                 error!("Error launching or activating application: {}", e);
@@ -1203,16 +1114,7 @@ impl WinDriver {
         // handle optional window title parameter
         // if a window title is provided, use it to filter the UI tree and
         // ignore the potentially stored window title in the WinDriver instance
-        let window_title_filter: Option<String>;
-        if window_title.is_none() {
-            if let Some(stored_title) = &self.window_title {
-                window_title_filter = Some(stored_title.clone());
-            } else {
-                window_title_filter = None;
-            }
-        } else {
-            window_title_filter = window_title;
-        }
+        let window_title_filter = window_title.or_else(|| self.window_title.clone());
         // get the ui tree in a separate thread
         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
         thread::spawn(|| {
@@ -1279,4 +1181,125 @@ impl WinDriver {
 
 fn normalized(filename: String) -> String {
     filename.replace(['|', '\\', ':', '/'], "")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_element(name: &str, xpath: &str, ct: &str, handle: isize) -> Element {
+        Element::new(
+            name.to_string(),
+            xpath.to_string(),
+            handle,
+            ct.to_string(),
+            vec![1, 2, 3],
+            (10, 20, 110, 120),
+        )
+    }
+
+    #[test]
+    fn test_element_new_stores_all_fields() {
+        let elem = make_element("Save", "//Button[@Name='Save']", "Button", 42);
+        assert_eq!(elem.name(), "Save");
+        assert_eq!(elem.xpath(), "//Button[@Name='Save']");
+        assert_eq!(elem.handle(), 42);
+        assert_eq!(elem.control_type(), "Button");
+        assert_eq!(elem.runtime_id(), vec![1, 2, 3]);
+        assert_eq!(elem.bounding_rectangle(), (10, 20, 110, 120));
+    }
+
+    #[test]
+    fn test_element_default_is_empty() {
+        let elem = Element::default();
+        assert_eq!(elem.name(), "");
+        assert_eq!(elem.xpath(), "");
+        assert_eq!(elem.handle(), 0);
+        assert_eq!(elem.control_type(), "");
+        assert!(elem.runtime_id().is_empty());
+        assert_eq!(elem.bounding_rectangle(), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_element_repr_contains_fields() {
+        let elem = make_element("OK", "/Root/Button", "Button", 99);
+        let repr = elem.__repr__().unwrap();
+        assert!(repr.contains("name='OK'"));
+        assert!(repr.contains("control_type='Button'"));
+        assert!(repr.contains("handle=99"));
+    }
+
+    #[test]
+    fn test_element_str_returns_name() {
+        let elem = make_element("Cancel", "", "Button", 0);
+        assert_eq!(elem.__str__().unwrap(), "Cancel");
+    }
+
+    #[test]
+    fn test_element_clone_is_independent() {
+        let elem = make_element("A", "/a", "Edit", 1);
+        let cloned = elem.clone();
+        assert_eq!(cloned.name(), elem.name());
+        assert_eq!(cloned.handle(), elem.handle());
+    }
+
+    #[test]
+    fn test_element_iterator_yields_all() {
+        let elems = vec![
+            make_element("A", "", "Button", 1),
+            make_element("B", "", "Edit", 2),
+            make_element("C", "", "Window", 3),
+        ];
+        let mut iter = ElementIterator {
+            elements: elems,
+            index: 0,
+        };
+        assert_eq!(iter.__len__(), 3);
+        assert_eq!(iter.__next__().unwrap().name(), "A");
+        assert_eq!(iter.__len__(), 2);
+        assert_eq!(iter.__next__().unwrap().name(), "B");
+        assert_eq!(iter.__next__().unwrap().name(), "C");
+        assert!(iter.__next__().is_none());
+        assert_eq!(iter.__len__(), 0);
+    }
+
+    #[test]
+    fn test_element_iterator_empty() {
+        let mut iter = ElementIterator {
+            elements: vec![],
+            index: 0,
+        };
+        assert_eq!(iter.__len__(), 0);
+        assert!(iter.__next__().is_none());
+    }
+
+    #[test]
+    fn test_element_from_save_ui_default() {
+        let save = SaveUIElementXML::default();
+        let elem = WinDriver::element_from_save_ui(&save);
+        assert_eq!(elem.name(), "");
+        assert_eq!(elem.xpath(), "");
+        assert_eq!(elem.control_type(), "");
+        assert_eq!(elem.handle(), 0);
+        assert!(elem.runtime_id().is_empty());
+        assert_eq!(elem.bounding_rectangle(), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_element_from_save_ui_with_xpath() {
+        let mut save = SaveUIElementXML::default();
+        save.set_xpath("//Button[@Name='OK']".to_string());
+        let elem = WinDriver::element_from_save_ui(&save);
+        assert_eq!(elem.xpath(), "//Button[@Name='OK']");
+    }
+
+    #[test]
+    fn test_normalized_strips_special_chars() {
+        assert_eq!(normalized("a|b\\c:d/e".to_string()), "abcde");
+    }
+
+    #[test]
+    fn test_normalized_preserves_regular_chars() {
+        assert_eq!(normalized("hello_world.txt".to_string()), "hello_world.txt");
+    }
 }

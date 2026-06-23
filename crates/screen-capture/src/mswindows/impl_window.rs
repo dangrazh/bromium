@@ -192,6 +192,7 @@ fn get_window_title(hwnd: HWND) -> ScreenCaptureResult<String> {
 }
 
 #[derive(Debug, Default)]
+#[repr(C)]
 struct LangCodePage {
     pub w_language: u16,
     pub w_code_page: u16,
@@ -273,8 +274,14 @@ fn get_app_name(pid: u32) -> ScreenCaptureResult<String> {
         )
         .ok()?;
 
+        // SAFETY: VerQueryValueW returns the byte length of the translation
+        // table. Divide by struct size to get the element count.
+        let element_count = lang_code_pages_length as usize / mem::size_of::<LangCodePage>();
+        if element_count == 0 {
+            return get_module_basename(*scope_guard_handle);
+        }
         let lang_code_pages: &[LangCodePage] =
-            slice::from_raw_parts(lang_code_pages_ptr.cast(), lang_code_pages_length as usize);
+            slice::from_raw_parts(lang_code_pages_ptr.cast(), element_count);
 
         // 按照 keys 的顺序读取文件的属性值
         // 优先读取 FileDescription

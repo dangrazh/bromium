@@ -261,16 +261,34 @@ mod tests {
     use super::*;
     use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
 
+    /// Requires an interactive desktop session (real monitor).
+    /// Skipped in CI — run with `cargo test -- --ignored`.
     #[test]
+    #[ignore]
     fn test_capture_monitor() {
-        let result = capture_monitor(0, 0, 100, 100);
+        use crate::Monitor;
+
+        let monitors = match Monitor::all() {
+            Ok(m) if !m.is_empty() => m,
+            _ => {
+                eprintln!("No monitors available, skipping test_capture_monitor");
+                return;
+            }
+        };
+        let mon = &monitors[0];
+        let x = mon.x().unwrap_or(0);
+        let y = mon.y().unwrap_or(0);
+        let result = capture_monitor(x, y, 100, 100);
         assert!(result.is_ok());
         let image = result.unwrap();
         assert_eq!(image.width(), 100);
         assert_eq!(image.height(), 100);
     }
 
+    /// Requires an interactive desktop session (desktop window handle).
+    /// Skipped in CI — run with `cargo test -- --ignored`.
     #[test]
+    #[ignore]
     fn test_capture_window() {
         unsafe {
             let hwnd = GetDesktopWindow();

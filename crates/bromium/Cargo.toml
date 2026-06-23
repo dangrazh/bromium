@@ -22,6 +22,5 @@ uitree = { path = "../uitree" }
 
 thiserror = "2.0"
 pyo3 = "0.25.1"
-fs_extra = "1.3.0"
 display-info = "0.5.4"
 windows-strings = "0.4.2"

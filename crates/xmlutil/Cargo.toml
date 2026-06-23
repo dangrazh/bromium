@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.99"
 thiserror = "2.0"
 xee-xpath = "0.1.4"
 ariadne = "0.5.1"

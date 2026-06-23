@@ -1,5 +1,3 @@
-mod macros;
-
 use bromium_common::printfmt;
 use chrono::Utc;
 use std::fs::{File, OpenOptions};

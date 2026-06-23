@@ -814,7 +814,8 @@ impl UIExplorer {
                 // render the result
                 if !outcome.is_success() {
                     // display the error message
-                    ui.add(egui::TextEdit::multiline(&mut outcome.get_error_msg())
+                    let mut error_msg = outcome.get_error_msg().to_string();
+                    ui.add(egui::TextEdit::multiline(&mut error_msg)
                                                     .desired_width(elem_width)
                                                     .code_editor()
                         );
@@ -1078,28 +1079,13 @@ impl eframe::App for UIExplorer {
                 {
                     printfmt!("Checking for WinEvents");
                     let winevents = self.winevent_monitor.check_for_events();
-                    let relevant_events = winevents
-                        .iter()
-                        .filter(|e| e.get_ui_element_name() != "UI Explore")
-                        .count();
-                    let ui_elem_events = winevents
-                        .iter()
-                        .filter(|e| e.get_ui_element_name() == "UI Explore")
-                        .count();
                     if !winevents.is_empty() {
-                        printfmt!(
-                            "Checked for WinEvents, found {} relevant and {} UI Explore events",
-                            relevant_events,
-                            ui_elem_events
+                        printfmt!("Checked for WinEvents, found {} events", winevents.len());
+                        self.app_mode = AppMode::NeedsTreeRefresh;
+                        self.set_status(
+                            "UI Tree change detected, refreshing...".to_string(),
+                            Duration::seconds(5),
                         );
-                        if relevant_events > 0 {
-                            // printfmt!("Triggering UI tree refresh");
-                            self.app_mode = AppMode::NeedsTreeRefresh;
-                            self.set_status(
-                                "UI Tree change detected, refreshing...".to_string(),
-                                Duration::seconds(5),
-                            );
-                        }
                     }
                 }
             }

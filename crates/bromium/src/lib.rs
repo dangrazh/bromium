@@ -4,8 +4,6 @@
 //! This module provides a Python interface to the WinDriver API, allowing users to
 //! automate tasks and interact with the Windows UI using Python.
 
-mod macros;
-
 mod app_control;
 pub mod exceptions;
 mod logging;

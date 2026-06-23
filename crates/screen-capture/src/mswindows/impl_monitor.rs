@@ -292,10 +292,12 @@ impl ImplMonitor {
         let monitor_width = self.width()?;
         let monitor_height = self.height()?;
 
+        let x_end = x.checked_add(width);
+        let y_end = y.checked_add(height);
         if width > monitor_width
             || height > monitor_height
-            || x + width > monitor_width
-            || y + height > monitor_height
+            || x_end.is_none_or(|v| v > monitor_width)
+            || y_end.is_none_or(|v| v > monitor_height)
         {
             return Err(ScreenCaptureError::InvalidCaptureRegion(format!(
                 "Region ({}, {}, {}, {}) is outside monitor bounds ({}, {}, {}, {})",

@@ -243,15 +243,10 @@ impl UITree {
             return Err("Parent index does not exist in the current tree".to_string());
         }
 
-        if self
+        if let Some(existing_node) = self
             .get_tree()
             .get_element_by_runtime_id(&subtree_runtime_id)
-            .is_some()
         {
-            let existing_node = self
-                .get_tree()
-                .get_element_by_runtime_id(&subtree_runtime_id)
-                .unwrap();
             let existing_node_index = existing_node.index;
             debug!(
                 "Subtree root already exists in the current tree at index {}. Replacing existing subtree.",
@@ -400,8 +395,8 @@ pub fn get_all_elements_xml(
     info!(
         "Starting UI element retrieval with max depth: {:?} and window title filters: calling_window_caption='{}', target_window_caption='{}'",
         max_depth,
-        calling_window_caption.clone().unwrap_or("none".to_string()),
-        target_window_caption.clone().unwrap_or("none".to_string())
+        calling_window_caption.as_deref().unwrap_or("none"),
+        target_window_caption.as_deref().unwrap_or("none")
     );
     let Some(automation) = get_ui_automation_instance() else {
         error!("Failed to create UIAutomation instance");
@@ -455,7 +450,7 @@ pub fn get_all_elements_xml(
     );
     let mut tree = UITreeMap::new(item, runtime_id.clone(), ());
 
-    let mut tree_path = ui_elem_props.get_name().clone();
+    let mut tree_path = ui_elem_props.get_name().to_string();
 
     let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, 0);
     ui_elements.push(ui_elem_in_tree);
@@ -516,8 +511,8 @@ pub fn get_all_elements_par_xml(
     info!(
         "Starting parallel UI element retrieval with max depth: {:?} and window title filters: calling_window_caption='{}', target_window_caption='{}'",
         max_depth,
-        calling_window_caption.clone().unwrap_or("none".to_string()),
-        target_window_caption.clone().unwrap_or("none".to_string())
+        calling_window_caption.as_deref().unwrap_or("none"),
+        target_window_caption.as_deref().unwrap_or("none")
     );
     let Some(automation) = get_ui_automation_instance() else {
         error!("Failed to create UIAutomation instance");
@@ -781,17 +776,17 @@ fn get_element(
     let control_type_tag = if ui_elem_props.get_control_type().is_empty() {
         "Unknown".to_string()
     } else {
-        ui_elem_props.get_control_type().clone()
+        ui_elem_props.get_control_type().to_string()
     };
     let mut start = BytesStart::new(&control_type_tag);
     start.push_attribute(("RtID", runtime_id.as_str()));
     let z_order_str = effective_z_order.to_string();
     start.push_attribute(("z-order", z_order_str.as_str()));
-    start.push_attribute(("Name", ui_elem_props.get_name().as_str()));
+    start.push_attribute(("Name", ui_elem_props.get_name()));
     if ui_elem_props.get_control_type().is_empty() {
         start.push_attribute(("ControlType", "No control type defined"));
     } else {
-        start.push_attribute(("ControlType", ui_elem_props.get_control_type().as_str()));
+        start.push_attribute(("ControlType", ui_elem_props.get_control_type()));
     }
     let _ = xml_writer.write_event(Event::Start(start));
 
@@ -846,4 +841,100 @@ fn get_element(
 
     let _ = xml_writer.write_event(Event::End(BytesEnd::new(&control_type_tag)));
     tree_path.truncate(prev_tree_path_len);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_XML: &str = r#"<Window RtID="1.2.3" Name="MainWindow" ControlType="Window" z-order="999">
+  <Panel RtID="4.5.6" Name="Header" ControlType="Panel" z-order="0">
+    <Button RtID="7.8.9" Name="OK" ControlType="Button" z-order="0"/>
+    <Button RtID="10.11.12" Name="Cancel" ControlType="Button" z-order="1"/>
+  </Panel>
+  <Panel RtID="13.14.15" Name="Content" ControlType="Panel" z-order="1">
+    <Edit RtID="16.17.18" Name="Username" ControlType="Edit" z-order="0"/>
+  </Panel>
+</Window>"#;
+
+    fn build_test_tree() -> UITree {
+        let mut tree = UITreeMap::new("MainWindow".to_string(), "1.2.3".to_string(), ());
+
+        let header = tree.add_child(0, "Header", "4.5.6", ());
+        tree.add_child(header, "OK", "7.8.9", ());
+        tree.add_child(header, "Cancel", "10.11.12", ());
+
+        let content = tree.add_child(0, "Content", "13.14.15", ());
+        tree.add_child(content, "Username", "16.17.18", ());
+
+        let mut elements = Vec::new();
+        for i in 0..tree.node_count() {
+            let elem = SaveUIElement::default();
+            elements.push(UIElementInTree::new(elem, i));
+        }
+
+        UITree::new(tree, TEST_XML.to_string(), elements)
+    }
+
+    #[test]
+    fn test_xpath_generation_returns_valid_xpath() {
+        let tree = build_test_tree();
+        let xpath = tree.get_xpath_for_element(2, false);
+        assert!(xpath.is_ok(), "XPath generation should succeed");
+        let xpath = xpath.unwrap();
+        assert!(!xpath.is_empty());
+        assert!(xpath.starts_with('/'));
+    }
+
+    #[test]
+    fn test_xpath_roundtrip_single_element() {
+        let tree = build_test_tree();
+        // Node 5 is "Username" (unique name)
+        let xpath = tree.get_xpath_for_element(5, false).unwrap();
+
+        let found = tree.get_element_by_xpath(&xpath);
+        assert!(
+            found.is_some(),
+            "Element with generated xpath '{}' should be found",
+            xpath
+        );
+    }
+
+    #[test]
+    fn test_xpath_roundtrip_all_nodes() {
+        let tree = build_test_tree();
+        for idx in 0..tree.get_tree().node_count() {
+            let xpath = tree.get_xpath_for_element(idx, false).unwrap();
+            let found = tree.get_element_by_xpath(&xpath);
+            assert!(
+                found.is_some(),
+                "Roundtrip failed for node {} with xpath '{}'",
+                idx,
+                xpath
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_element_by_xpath_not_found() {
+        let tree = build_test_tree();
+        let found = tree.get_element_by_xpath("//NonExistent[@Name='ghost']");
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_get_elements_by_xpath_multiple() {
+        let tree = build_test_tree();
+        // Both Buttons are children of Panel — select all Button elements
+        let found = tree.get_elements_by_xpath("//Button");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_get_elements_by_xpath_none() {
+        let tree = build_test_tree();
+        let found = tree.get_elements_by_xpath("//Slider");
+        assert!(found.is_none());
+    }
 }
