@@ -12,7 +12,6 @@ use windows::Win32::Foundation::HWND;
 pub struct WinEventMonitor {
     hook: WinEventHook,
     rx_channel: Receiver<WinEventInfo>,
-    last_hwnd: HWND,
     mouse_hwnd: HWND,
 }
 
@@ -27,12 +26,10 @@ impl WinEventMonitor {
         let mouse_hwnd: HWND = HWND::default();
         let (hook, rx) =
             create_hook().expect("Failed to install WinEvent hook — is the event loop running?");
-        let last_hwnd: HWND = HWND::default();
 
         WinEventMonitor {
             hook,
             rx_channel: rx,
-            last_hwnd,
             mouse_hwnd,
         }
     }
@@ -41,12 +38,10 @@ impl WinEventMonitor {
     pub fn try_new() -> Result<Self, win_event_hook::errors::Error> {
         let mouse_hwnd: HWND = HWND::default();
         let (hook, rx) = create_hook()?;
-        let last_hwnd: HWND = HWND::default();
 
         Ok(WinEventMonitor {
             hook,
             rx_channel: rx,
-            last_hwnd,
             mouse_hwnd,
         })
     }
@@ -62,7 +57,6 @@ impl WinEventMonitor {
         for event_info in rx_iter {
             let hwnd = *event_info.hwnd;
             if hwnd.0 != self.mouse_hwnd.0 {
-                self.last_hwnd = hwnd;
                 output.push(WinEvtMonitorEvent {
                     event: event_info.event,
                     hwnd,

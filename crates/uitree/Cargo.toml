@@ -12,5 +12,5 @@ bromium-common = { path = "../bromium-common" }
 xmlutil = { path = "../xmlutil" }
 
 xot.workspace = true
-thiserror = "2.0"
-quick-xml = "0.38.0"
+thiserror.workspace = true
+quick-xml.workspace = true

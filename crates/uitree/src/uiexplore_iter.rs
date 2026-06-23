@@ -3,15 +3,12 @@ use crate::common_types::UIElementInTree;
 use crate::error::UITreeError;
 use crate::save_ui_element::SaveUIElement;
 use crate::uiexplore_xml::UITree;
+use crate::walker_common::{self, MAX_SIBLINGS};
 use bromium_common::{format_runtime_id, printfmt};
 
 use std::sync::mpsc::Sender;
 use uiautomation::core::UIAutomation;
 use uiautomation::{UIElement, UITreeWalker};
-
-/// Hard upper bound on sibling iterations to prevent infinite loops
-/// from COM UIAutomation cycles (e.g. crashed or hung processes).
-const MAX_SIBLINGS: usize = 10_000;
 
 pub fn get_all_elements_iterative(
     tx: Sender<Result<UITree, UITreeError>>,
@@ -41,19 +38,8 @@ pub fn get_all_elements_iterative(
             return;
         }
     };
-    let ui_elem_props = SaveUIElement::new(&root, 0, 999);
-    let runtime_id = format_runtime_id(ui_elem_props.get_runtime_id());
-    let item = format!(
-        "'{}' {} ({} | {} | {})",
-        ui_elem_props.get_name(),
-        ui_elem_props.get_localized_control_type(),
-        ui_elem_props.get_classname(),
-        ui_elem_props.get_framework_id(),
-        runtime_id
-    );
-    let mut tree = UITreeMap::new(item, runtime_id.clone(), ());
-    let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, 0);
-    ui_elements.push(ui_elem_in_tree);
+
+    let (mut tree, _runtime_id) = walker_common::setup_root(&root, &mut ui_elements);
 
     if let Ok(_first_child) = walker.get_first_child(&root) {
         get_element_iterative(
@@ -69,16 +55,7 @@ pub fn get_all_elements_iterative(
     }
 
     printfmt!("Sorting UI elements by z-order and size...");
-    ui_elements.sort_unstable_by(|a, b| {
-        a.get_element_props()
-            .get_z_order()
-            .cmp(&b.get_element_props().get_z_order())
-            .then(
-                a.get_element_props()
-                    .get_bounding_rect_size()
-                    .cmp(&b.get_element_props().get_bounding_rect_size()),
-            )
-    });
+    walker_common::sort_elements(&mut ui_elements);
 
     let ui_tree = UITree::new(tree, String::new(), ui_elements);
 
@@ -115,14 +92,7 @@ fn get_element_iterative(
         let effective_z_order = if level == 0 { 999 } else { z_order };
         let ui_elem_props = SaveUIElement::new(&element, level, effective_z_order);
         let runtime_id = format_runtime_id(ui_elem_props.get_runtime_id());
-        let item = format!(
-            "'{}' {} ({} | {} | {})",
-            ui_elem_props.get_name(),
-            ui_elem_props.get_localized_control_type(),
-            ui_elem_props.get_classname(),
-            ui_elem_props.get_framework_id(),
-            runtime_id
-        );
+        let item = walker_common::format_node_item(&ui_elem_props, &runtime_id);
 
         let new_parent = tree.add_child(parent, &item, &runtime_id, ());
         let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, new_parent);

@@ -102,13 +102,6 @@ impl SaveUIElement {
         self.xpath.as_deref()
     }
 
-    // return reference to self to avoid
-    // code using the SaveUIElement from breaking
-    // after we changed the internal implementation
-    pub fn get_element(&self) -> &Self {
-        self
-    }
-
     pub fn set_focus(&self) -> uiautomation::Result<()> {
         debug!(
             "Setting focus to element with runtime id: {:?}",

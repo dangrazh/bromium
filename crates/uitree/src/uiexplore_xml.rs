@@ -2,6 +2,7 @@ use crate::common_types::UIElementInTree;
 use crate::error::UITreeError;
 
 use crate::save_ui_element::SaveUIElement;
+use crate::walker_common::{self, MAX_SIBLINGS};
 use bromium_common::{format_runtime_id, get_ui_automation_instance};
 
 use crate::UITreeMap;
@@ -20,10 +21,6 @@ use std::sync::mpsc::{Sender, channel};
 use uiautomation::{UIElement, UITreeWalker};
 
 use log::{debug, error, info, trace, warn};
-
-/// Hard upper bound on sibling iterations to prevent infinite loops
-/// from COM UIAutomation cycles (e.g. crashed or hung processes).
-const MAX_SIBLINGS: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct UITree {
@@ -280,16 +277,7 @@ impl UITree {
         self.get_elements_mut().append(subtree.get_elements_mut());
 
         info!("Sorting UI elements by z-order and size...");
-        self.get_elements_mut().sort_unstable_by(|a, b| {
-            a.get_element_props()
-                .get_z_order()
-                .cmp(&b.get_element_props().get_z_order())
-                .then(
-                    a.get_element_props()
-                        .get_bounding_rect_size()
-                        .cmp(&b.get_element_props().get_bounding_rect_size()),
-                )
-        });
+        walker_common::sort_elements(self.get_elements_mut());
 
         self.append_children(new_index, &mut subtree, subtree_root)?;
 
@@ -501,16 +489,7 @@ pub fn get_all_elements_xml(
     let xml_dom_tree = String::from_utf8(xml_writer.into_inner().into_inner()).unwrap_or_default();
 
     info!("Sorting UI elements by z-order and size...");
-    ui_elements.sort_unstable_by(|a, b| {
-        a.get_element_props()
-            .get_z_order()
-            .cmp(&b.get_element_props().get_z_order())
-            .then(
-                a.get_element_props()
-                    .get_bounding_rect_size()
-                    .cmp(&b.get_element_props().get_bounding_rect_size()),
-            )
-    });
+    walker_common::sort_elements(&mut ui_elements);
 
     let ui_tree = UITree::new(tree, xml_dom_tree, ui_elements);
 
@@ -608,16 +587,7 @@ pub fn get_all_elements_par_xml(
     let xml_dom_tree = String::from_utf8(xml_writer.into_inner().into_inner()).unwrap_or_default();
 
     info!("Sorting UI elements by z-order and size...");
-    ui_elements.sort_unstable_by(|a, b| {
-        a.get_element_props()
-            .get_z_order()
-            .cmp(&b.get_element_props().get_z_order())
-            .then(
-                a.get_element_props()
-                    .get_bounding_rect_size()
-                    .cmp(&b.get_element_props().get_bounding_rect_size()),
-            )
-    });
+    walker_common::sort_elements(&mut ui_elements);
 
     let mut ui_tree = UITree::new(tree, xml_dom_tree, ui_elements);
     debug!(
@@ -801,14 +771,7 @@ fn get_element(
     let effective_z_order = if level == 0 { 999 } else { z_order };
     let ui_elem_props = SaveUIElement::new(element, level, effective_z_order);
     let runtime_id = format_runtime_id(ui_elem_props.get_runtime_id());
-    let item = format!(
-        "'{}' {} ({} | {} | {})",
-        ui_elem_props.get_name(),
-        ui_elem_props.get_localized_control_type(),
-        ui_elem_props.get_classname(),
-        ui_elem_props.get_framework_id(),
-        runtime_id
-    );
+    let item = walker_common::format_node_item(&ui_elem_props, &runtime_id);
 
     let parent = tree.add_child(parent, item.as_str(), runtime_id.as_str(), ());
 

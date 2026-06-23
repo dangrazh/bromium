@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-thiserror = "2.0"
+thiserror.workspace = true
 xee-xpath = "0.1.4"
 ariadne = "0.5.1"
 roxmltree = "0.20.0"
-quick-xml = "0.38.0"
+quick-xml.workspace = true
 xot.workspace = true

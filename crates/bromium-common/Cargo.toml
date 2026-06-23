@@ -7,6 +7,4 @@ edition = "2024"
 chrono.workspace = true
 log.workspace = true
 uiautomation.workspace = true
-
-[dev-dependencies]
-windows = { workspace = true }
+windows.workspace = true

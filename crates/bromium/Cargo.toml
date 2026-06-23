@@ -20,7 +20,7 @@ bromium-common = { path = "../bromium-common" }
 screen-capture = { path = "../screen-capture" }
 uitree = { path = "../uitree" }
 
-thiserror = "2.0"
+thiserror.workspace = true
 pyo3 = "0.25.1"
 display-info = "0.5.4"
 windows-strings = "0.4.2"

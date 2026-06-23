@@ -7,6 +7,8 @@ pub use timeout::execute_with_timeout;
 mod uia;
 pub use uia::{RuntimeIdFilter, get_ui_automation_instance};
 
+pub mod rectangle;
+
 /// Formats a runtime ID slice as a dash-separated string (e.g., `"42-1-234-56"`).
 /// Returns `"0-0-0-0"` if the slice is empty, matching the fallback convention.
 pub fn format_runtime_id(id: &[i32]) -> String {

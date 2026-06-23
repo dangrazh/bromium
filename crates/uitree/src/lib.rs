@@ -18,6 +18,8 @@ pub type UIElementInTreeXML = UIElementInTree;
 /// Backward-compatible alias — all three tree walkers now share one `UIElementInTree`.
 pub type UIElementInTreeIter = UIElementInTree;
 
+mod walker_common;
+
 mod uiexplore_xml;
 pub use uiexplore_xml::{UITree, get_all_elements_par_xml, get_all_elements_xml};
 

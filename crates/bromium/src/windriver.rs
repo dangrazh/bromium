@@ -221,71 +221,51 @@ impl Element {
         )
     }
 
-    // Region mouse methods
+    // ─── Mouse methods ──────────────────────────────────────────────────
+
     pub fn send_click(&self) -> PyResult<()> {
         debug!("Element::send_click called for element: {}", self.name);
-        if let Ok(e) = convert_to_ui_element(self) {
-            let raw_element = e.as_ref();
-            if supports_invoke(raw_element) {
-                debug!("Element supports Invoke pattern, using invoke_click.");
-                match invoke_click(raw_element) {
-                    Ok(_) => {
-                        info!(
-                            "Successfully invoked click on element: {}",
-                            e.get_name().unwrap_or("Name not set".to_string())
-                        );
-                    }
-                    Err(err) => {
-                        error!("Error invoking click on element: {:?}", err);
-                        return Err(AutomationError::new_err(format!(
-                            "Invoke click failed on element '{}' (runtime_id={:?}): {}",
-                            self.name, self.runtime_id, err
-                        )));
-                    }
-                }
-            } else if supports_select(raw_element) {
-                debug!("Element supports Select pattern, using select_item.");
-                match select_item(raw_element) {
-                    Ok(_) => {
-                        info!(
-                            "Successfully selected item on element: {}",
-                            e.get_name().unwrap_or("Name not set".to_string())
-                        );
-                    }
-                    Err(err) => {
-                        error!("Error selecting item on element: {:?}", err);
-                        return Err(AutomationError::new_err(format!(
-                            "Select item failed on element '{}' (runtime_id={:?}): {}",
-                            self.name, self.runtime_id, err
-                        )));
-                    }
-                }
-            } else {
-                debug!(
-                    "Element does not support Invoke or Select pattern, using standard click as fallback."
-                );
-                match e.click() {
-                    Ok(_) => {
-                        info!(
-                            "Successfully clicked on element: {}",
-                            e.get_name().unwrap_or("Name not set".to_string())
-                        );
-                    }
-                    Err(err) => {
-                        error!("Error clicking on element: {:?}", err);
-                        return Err(AutomationError::new_err(format!(
-                            "Click failed on element '{}' (runtime_id={:?}): {}",
-                            self.name, self.runtime_id, err
-                        )));
-                    }
-                }
-            }
-        } else {
-            return Err(ElementNotFoundError::new_err(format!(
+        let e = convert_to_ui_element(self).map_err(|_| {
+            ElementNotFoundError::new_err(format!(
                 "Element '{}' not found (runtime_id={:?})",
                 self.name, self.runtime_id
-            )));
+            ))
+        })?;
+        let raw_element = e.as_ref();
+        if supports_invoke(raw_element) {
+            debug!("Element supports Invoke pattern, using invoke_click.");
+            invoke_click(raw_element).map_err(|err| {
+                error!("Error invoking click on element: {:?}", err);
+                AutomationError::new_err(format!(
+                    "Invoke click failed on element '{}' (runtime_id={:?}): {}",
+                    self.name, self.runtime_id, err
+                ))
+            })?;
+        } else if supports_select(raw_element) {
+            debug!("Element supports Select pattern, using select_item.");
+            select_item(raw_element).map_err(|err| {
+                error!("Error selecting item on element: {:?}", err);
+                AutomationError::new_err(format!(
+                    "Select item failed on element '{}' (runtime_id={:?}): {}",
+                    self.name, self.runtime_id, err
+                ))
+            })?;
+        } else {
+            debug!(
+                "Element does not support Invoke or Select pattern, using standard click as fallback."
+            );
+            e.click().map_err(|err| {
+                error!("Error clicking on element: {:?}", err);
+                AutomationError::new_err(format!(
+                    "Click failed on element '{}' (runtime_id={:?}): {}",
+                    self.name, self.runtime_id, err
+                ))
+            })?;
         }
+        info!(
+            "Successfully clicked on element: {}",
+            e.get_name().unwrap_or("Name not set".to_string())
+        );
         Ok(())
     }
 
@@ -294,26 +274,7 @@ impl Element {
             "Element::send_double_click called for element: {}",
             self.name
         );
-        if let Ok(e) = convert_to_ui_element(self) {
-            match e.double_click() {
-                Ok(_) => {
-                    info!("Double clicked on element: {:#?}", e);
-                }
-                Err(err) => {
-                    error!("Error double clicking on element: {:?}", err);
-                    return Err(AutomationError::new_err(format!(
-                        "Double click failed on element '{}' (runtime_id={:?}): {}",
-                        self.name, self.runtime_id, err
-                    )));
-                }
-            }
-        } else {
-            return Err(ElementNotFoundError::new_err(format!(
-                "Element '{}' not found (runtime_id={:?})",
-                self.name, self.runtime_id
-            )));
-        }
-        Ok(())
+        with_ui_element(self, "double_click", |e| e.double_click())
     }
 
     pub fn send_right_click(&self) -> PyResult<()> {
@@ -321,78 +282,22 @@ impl Element {
             "Element::send_right_click called for element: {}",
             self.name
         );
-        if let Ok(e) = convert_to_ui_element(self) {
-            match e.right_click() {
-                Ok(_) => {
-                    info!("Right clicked on element: {:#?}", e);
-                }
-                Err(err) => {
-                    error!("Error right clicking on element: {:?}", err);
-                    return Err(AutomationError::new_err(format!(
-                        "Right click failed on element '{}' (runtime_id={:?}): {}",
-                        self.name, self.runtime_id, err
-                    )));
-                }
-            }
-        } else {
-            return Err(ElementNotFoundError::new_err(format!(
-                "Element '{}' not found (runtime_id={:?})",
-                self.name, self.runtime_id
-            )));
-        }
-        Ok(())
+        with_ui_element(self, "right_click", |e| e.right_click())
     }
 
     pub fn hold_click(&self, holdkeys: String) -> PyResult<()> {
         debug!("Element::hold_click called for element: {}", self.name);
-        if let Ok(e) = convert_to_ui_element(self) {
-            match e.hold_click(&holdkeys) {
-                Ok(_) => {
-                    info!("Hold clicked on element: {:#?}", e);
-                }
-                Err(err) => {
-                    error!("Error hold clicking on element: {:?}", err);
-                    return Err(AutomationError::new_err(format!(
-                        "Hold click failed on element '{}' with holdkeys='{}' (runtime_id={:?}): {}",
-                        self.name, holdkeys, self.runtime_id, err
-                    )));
-                }
-            }
-        } else {
-            return Err(ElementNotFoundError::new_err(format!(
-                "Element '{}' not found (runtime_id={:?})",
-                self.name, self.runtime_id
-            )));
-        }
-        Ok(())
+        with_ui_element(self, "hold_click", |e| e.hold_click(&holdkeys))
     }
 
-    // Region keyboard methods
+    // ─── Keyboard methods ───────────────────────────────────────────────
+
     pub fn send_keys(&self, keys: String) -> PyResult<()> {
         debug!(
             "Element::send_keys called with keys: '{}' for element: {}",
             keys, self.name
         );
-        if let Ok(e) = convert_to_ui_element(self) {
-            match e.send_keys(&keys, 20) {
-                Ok(_) => {
-                    info!("Sent keys '{}' to element: {:#?}", keys, e);
-                }
-                Err(err) => {
-                    error!("Error sending keys to element: {:?}", err);
-                    return Err(AutomationError::new_err(format!(
-                        "send_keys failed on element '{}' with keys='{}' (runtime_id={:?}): {}",
-                        self.name, keys, self.runtime_id, err
-                    )));
-                }
-            }
-        } else {
-            return Err(ElementNotFoundError::new_err(format!(
-                "Element '{}' not found (runtime_id={:?})",
-                self.name, self.runtime_id
-            )));
-        }
-        Ok(())
+        with_ui_element(self, "send_keys", |e| e.send_keys(&keys, 20))
     }
 
     pub fn send_text(&self, text: String) -> PyResult<()> {
@@ -473,54 +378,19 @@ impl Element {
             "Element::hold_send_keys called with keys: '{}' for element: {}",
             keys, self.name
         );
-        if let Ok(e) = convert_to_ui_element(self) {
-            match e.hold_send_keys(&holdkeys, &keys, interval) {
-                Ok(_) => {
-                    info!("Hold sent keys '{}' to element: {:#?}", keys, e);
-                }
-                Err(err) => {
-                    error!("Error holding send keys to element: {:?}", err);
-                    return Err(AutomationError::new_err(format!(
-                        "hold_send_keys failed on element '{}' with holdkeys='{}', keys='{}' (runtime_id={:?}): {}",
-                        self.name, holdkeys, keys, self.runtime_id, err
-                    )));
-                }
-            }
-        } else {
-            return Err(ElementNotFoundError::new_err(format!(
-                "Element '{}' not found (runtime_id={:?})",
-                self.name, self.runtime_id
-            )));
-        }
-        Ok(())
+        with_ui_element(self, "hold_send_keys", |e| {
+            e.hold_send_keys(&holdkeys, &keys, interval)
+        })
     }
 
-    // Region misc methods
+    // ─── Misc methods ───────────────────────────────────────────────────
+
     pub fn show_context_menu(&self) -> PyResult<()> {
         debug!(
             "Element::show_context_menu called for element: {}",
             self.name
         );
-        if let Ok(e) = convert_to_ui_element(self) {
-            match e.show_context_menu() {
-                Ok(_) => {
-                    info!("Context menu shown for element: {:#?}", e);
-                }
-                Err(err) => {
-                    error!("Error showing context menu for element: {:?}", err);
-                    return Err(AutomationError::new_err(format!(
-                        "show_context_menu failed on element '{}' (runtime_id={:?}): {}",
-                        self.name, self.runtime_id, err
-                    )));
-                }
-            }
-        } else {
-            return Err(ElementNotFoundError::new_err(format!(
-                "Element '{}' not found (runtime_id={:?})",
-                self.name, self.runtime_id
-            )));
-        }
-        Ok(())
+        with_ui_element(self, "show_context_menu", |e| e.show_context_menu())
     }
 }
 
@@ -540,6 +410,35 @@ impl Default for Element {
             },
         }
     }
+}
+
+/// Resolve the underlying `UIElement` for `element` and run `action` on it.
+///
+/// Encapsulates the repeated convert → act → map-error pattern used by
+/// every `Element` action method.
+fn with_ui_element<F>(element: &Element, action_name: &str, action: F) -> PyResult<()>
+where
+    F: FnOnce(&UIElement) -> Result<(), uiautomation::Error>,
+{
+    let e = convert_to_ui_element(element).map_err(|_| {
+        ElementNotFoundError::new_err(format!(
+            "Element '{}' not found (runtime_id={:?})",
+            element.name, element.runtime_id
+        ))
+    })?;
+    action(&e).map_err(|err| {
+        error!("{} failed on element: {:?}", action_name, err);
+        AutomationError::new_err(format!(
+            "{} failed on element '{}' (runtime_id={:?}): {}",
+            action_name, element.name, element.runtime_id, err
+        ))
+    })?;
+    info!(
+        "{} succeeded on element: {}",
+        action_name,
+        e.get_name().unwrap_or("Name not set".to_string())
+    );
+    Ok(())
 }
 
 fn convert_to_ui_element(element: &Element) -> Result<UIElement, uiautomation::Error> {
@@ -841,7 +740,6 @@ impl WinDriver {
             trace!("Found element with xpath: {}", xpath);
 
             let ui_element_props = ui_element_in_tree.get_element_props();
-            let ui_element_props = ui_element_props.get_element();
             let bounding_rect = ui_element_props.get_bounding_rectangle();
             let control_type = ui_element_props.get_control_type();
 

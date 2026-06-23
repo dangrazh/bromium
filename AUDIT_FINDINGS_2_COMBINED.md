@@ -649,12 +649,12 @@ Reduce duplication and complete the Consolidation branch's goals. Shared infrast
 
 | Step | Action | Finding | Effort |
 |------|--------|---------|--------|
-| 12 | **R-12** Centralise workspace dependencies | CF-26 | Small |
-| 13 | **R-13** Consolidate `rectangle.rs` into `bromium-common` | CF-08 | Medium |
-| 14 | **R-14** Add RAII `GdiGuard` for GDI resources | CF-10 | Small |
-| 15 | **R-15** Extract shared walker helpers in `uitree` | CF-24 | Small |
-| 16 | **R-16** Extract `with_ui_element` helper in `bromium::Element` | CF-07 | Small |
-| 17 | **R-17** Remove dead code across crates | CF-23 | Trivial |
+| 12 | ✅ | **R-12** Centralise workspace dependencies | CF-26 | Small |
+| 13 | ✅ | **R-13** Consolidate `rectangle.rs` into `bromium-common` | CF-08 | Medium |
+| 14 | ✅ | **R-14** Add RAII `GdiGuard` for GDI resources | CF-10 | Small |
+| 15 | ✅ | **R-15** Extract shared walker helpers in `uitree` | CF-24 | Small |
+| 16 | ✅ | **R-16** Extract `with_ui_element` helper in `bromium::Element` | CF-07 | Small |
+| 17 | ✅ | **R-17** Remove dead code across crates | CF-23 | Trivial |
 
 ### Phase 5 — API & Usability Improvements
 

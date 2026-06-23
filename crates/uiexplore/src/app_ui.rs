@@ -44,9 +44,7 @@ impl TreeState {
         // update the state to reflect the change
         if let Some(current_element) = &self.active_element {
             // only update the state if there is a change in the active element
-            if new_active_element.get_element().get_runtime_id()
-                != current_element.get_element().get_runtime_id()
-            {
+            if new_active_element.get_runtime_id() != current_element.get_runtime_id() {
                 self.prev_element = Some(current_element.clone());
                 self.clear_frame = true;
                 self.active_element = Some(new_active_element);
@@ -620,10 +618,10 @@ impl UIExplorer {
                 if let Some(active_element) = &state.active_element {
                     // // Optionally render the frame around the active element on the screen
                     // if self.highlighting {
-                    //     let left: f32 = active_element.get_element().get_bounding_rectangle().get_left() as f32 * self.app_context.screen_scale;
-                    //     let top: f32 = active_element.get_element().get_bounding_rectangle().get_top() as f32 * self.app_context.screen_scale;
-                    //     let right: f32 = active_element.get_element().get_bounding_rectangle().get_right() as f32 * self.app_context.screen_scale;
-                    //     let bottom: f32 = active_element.get_element().get_bounding_rectangle().get_bottom() as f32 * self.app_context.screen_scale;
+                    //     let left: f32 = active_element.get_bounding_rectangle().get_left() as f32 * self.app_context.screen_scale;
+                    //     let top: f32 = active_element.get_bounding_rectangle().get_top() as f32 * self.app_context.screen_scale;
+                    //     let right: f32 = active_element.get_bounding_rectangle().get_right() as f32 * self.app_context.screen_scale;
+                    //     let bottom: f32 = active_element.get_bounding_rectangle().get_bottom() as f32 * self.app_context.screen_scale;
 
                     //     let rect: RECT = RECT {
                     //         left: left as i32,
@@ -633,10 +631,10 @@ impl UIExplorer {
                     //     };
 
                     //     if let Some(prev_element) = &state.prev_element {
-                    //         let prev_left: f32 = prev_element.get_element().get_bounding_rectangle().get_left() as f32 * self.app_context.screen_scale;
-                    //         let prev_top: f32 = prev_element.get_element().get_bounding_rectangle().get_top() as f32 * self.app_context.screen_scale;
-                    //         let prev_right: f32 = prev_element.get_element().get_bounding_rectangle().get_right() as f32 * self.app_context.screen_scale;
-                    //         let prev_bottom: f32 = prev_element.get_element().get_bounding_rectangle().get_bottom() as f32 * self.app_context.screen_scale;
+                    //         let prev_left: f32 = prev_element.get_bounding_rectangle().get_left() as f32 * self.app_context.screen_scale;
+                    //         let prev_top: f32 = prev_element.get_bounding_rectangle().get_top() as f32 * self.app_context.screen_scale;
+                    //         let prev_right: f32 = prev_element.get_bounding_rectangle().get_right() as f32 * self.app_context.screen_scale;
+                    //         let prev_bottom: f32 = prev_element.get_bounding_rectangle().get_bottom() as f32 * self.app_context.screen_scale;
 
                     //         let prev_rect: RECT = RECT {
                     //             left: prev_left as i32,
@@ -663,21 +661,18 @@ impl UIExplorer {
                         .max_col_width(800.0)
                         .show(ui, |ui| {
                             ui.label("Name:");
-                            ui.label(active_element.get_element().get_name());
+                            ui.label(active_element.get_name());
                             ui.end_row();
 
                             ui.label("Control Type:");
-                            ui.label(active_element.get_element().get_control_type().to_owned());
+                            ui.label(active_element.get_control_type().to_owned());
                             ui.end_row();
 
                             ui.label("Localized Control Type:");
-                            ui.label(active_element.get_element().get_localized_control_type());
+                            ui.label(active_element.get_localized_control_type());
                             if ui.button("📋").clicked() {
                                 ui.ctx().copy_text(
-                                    active_element
-                                        .get_element()
-                                        .get_localized_control_type()
-                                        .to_owned(),
+                                    active_element.get_localized_control_type().to_owned(),
                                 );
                                 self.set_status(
                                     "Value copied to clipboard".to_string(),
@@ -687,15 +682,14 @@ impl UIExplorer {
                             ui.end_row();
 
                             ui.label("Framework ID:");
-                            ui.label(active_element.get_element().get_framework_id());
+                            ui.label(active_element.get_framework_id());
                             ui.end_row();
 
                             ui.label("Class Name:");
-                            ui.label(active_element.get_element().get_classname());
+                            ui.label(active_element.get_classname());
                             if ui.button("📋").clicked() {
-                                ui.ctx().copy_text(
-                                    active_element.get_element().get_classname().to_owned(),
-                                );
+                                ui.ctx()
+                                    .copy_text(active_element.get_classname().to_owned());
                                 self.set_status(
                                     "Value copied to clipboard".to_string(),
                                     Duration::seconds(2),
@@ -706,7 +700,6 @@ impl UIExplorer {
                             ui.label("Runtime ID:");
                             ui.label(
                                 active_element
-                                    .get_element()
                                     .get_runtime_id()
                                     .iter()
                                     .map(|x| x.to_string())
@@ -716,10 +709,7 @@ impl UIExplorer {
                             ui.end_row();
 
                             ui.label("Surrounding Rectangle:");
-                            ui.label(format!(
-                                "{:?}",
-                                active_element.get_element().get_bounding_rectangle()
-                            ));
+                            ui.label(format!("{:?}", active_element.get_bounding_rectangle()));
                             ui.end_row();
 
                             ui.label("level:");
@@ -731,7 +721,7 @@ impl UIExplorer {
                             ui.end_row();
 
                             ui.label("Automation ID:");
-                            ui.label(active_element.get_element().get_automation_id().to_owned());
+                            ui.label(active_element.get_automation_id().to_owned());
                             ui.end_row();
 
                             let xpath = self
@@ -919,7 +909,7 @@ impl UIExplorer {
                     &cursor_position,
                     self.ui_tree.get_elements(),
                 ) {
-                    // printfmt!("Updating state with element found at cursor position: {}", ui_element_props.get_element_props().get_element().get_name());
+                    // printfmt!("Updating state with element found at cursor position: {}", ui_element_props.get_element_props().get_name());
                     state.update_state(
                         ui_element_props.get_element_props().clone(),
                         ui_element_props.get_tree_index(),
@@ -953,25 +943,13 @@ impl UIExplorer {
         if self.highlighting {
             let active_element = state.active_element.as_ref().unwrap();
 
-            let left: f32 = active_element
-                .get_element()
-                .get_bounding_rectangle()
-                .get_left() as f32
+            let left: f32 = active_element.get_bounding_rectangle().get_left() as f32
                 * self.app_context.screen_scale;
-            let top: f32 = active_element
-                .get_element()
-                .get_bounding_rectangle()
-                .get_top() as f32
+            let top: f32 = active_element.get_bounding_rectangle().get_top() as f32
                 * self.app_context.screen_scale;
-            let right: f32 = active_element
-                .get_element()
-                .get_bounding_rectangle()
-                .get_right() as f32
+            let right: f32 = active_element.get_bounding_rectangle().get_right() as f32
                 * self.app_context.screen_scale;
-            let bottom: f32 = active_element
-                .get_element()
-                .get_bounding_rectangle()
-                .get_bottom() as f32
+            let bottom: f32 = active_element.get_bounding_rectangle().get_bottom() as f32
                 * self.app_context.screen_scale;
 
             let rect: RECT = RECT {
@@ -982,25 +960,13 @@ impl UIExplorer {
             };
 
             if let Some(prev_element) = &state.prev_element {
-                let prev_left: f32 = prev_element
-                    .get_element()
-                    .get_bounding_rectangle()
-                    .get_left() as f32
+                let prev_left: f32 = prev_element.get_bounding_rectangle().get_left() as f32
                     * self.app_context.screen_scale;
-                let prev_top: f32 = prev_element
-                    .get_element()
-                    .get_bounding_rectangle()
-                    .get_top() as f32
+                let prev_top: f32 = prev_element.get_bounding_rectangle().get_top() as f32
                     * self.app_context.screen_scale;
-                let prev_right: f32 = prev_element
-                    .get_element()
-                    .get_bounding_rectangle()
-                    .get_right() as f32
+                let prev_right: f32 = prev_element.get_bounding_rectangle().get_right() as f32
                     * self.app_context.screen_scale;
-                let prev_bottom: f32 = prev_element
-                    .get_element()
-                    .get_bounding_rectangle()
-                    .get_bottom() as f32
+                let prev_bottom: f32 = prev_element.get_bounding_rectangle().get_bottom() as f32
                     * self.app_context.screen_scale;
 
                 let prev_rect: RECT = RECT {
@@ -1172,15 +1138,12 @@ fn event_summary(event: &egui::Event, ui_elements: &[UIElementInTreeXML]) -> Str
             {
                 // format!("MouseMoved {{ x: {}, y: {} }} over {}", cursor_position.x, cursor_position.y, ui_element_props.name)
                 let ui_element_props = ui_element_props.get_element_props();
-                let control_type: String = ui_element_props
-                    .get_element()
-                    .get_control_type()
-                    .to_string();
+                let control_type: String = ui_element_props.get_control_type().to_string();
                 format!(
                     "MouseMoved over {{ name: '{}', control_type: '{}' bounding_rect: {} }}",
-                    ui_element_props.get_element().get_name(),
+                    ui_element_props.get_name(),
                     control_type,
-                    ui_element_props.get_element().get_bounding_rectangle()
+                    ui_element_props.get_bounding_rectangle()
                 )
             } else {
                 // format!("MouseMoved {{ x: {}, y: {} }} ", cursor_position.x, cursor_position.y)
