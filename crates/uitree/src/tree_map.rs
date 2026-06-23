@@ -9,7 +9,7 @@ pub enum TreeMapError {
 }
 
 // A generic node in a UITreeMap
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct UITreeNode<T> {
     pub name: String,
     pub runtime_id: String,
@@ -17,6 +17,23 @@ pub struct UITreeNode<T> {
     pub parent: usize,
     pub children: Vec<usize>,
     pub data: T,
+    /// Whether this node is alive. Dead nodes are tombstones left by `remove_node`
+    /// to keep arena indices stable.
+    pub is_alive: bool,
+}
+
+impl<T: Default> Default for UITreeNode<T> {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            runtime_id: String::new(),
+            index: 0,
+            parent: 0,
+            children: Vec::new(),
+            data: T::default(),
+            is_alive: false, // default-constructed nodes are dead tombstones
+        }
+    }
 }
 
 impl<T: Default> UITreeNode<T> {
@@ -28,6 +45,7 @@ impl<T: Default> UITreeNode<T> {
             parent: 0,
             children: Vec::new(),
             data,
+            is_alive: false, // placeholder nodes start dead
         }
     }
 }
@@ -48,6 +66,7 @@ impl<T> UITreeMap<T> {
             parent: 0,
             children: Vec::new(),
             data: root_data,
+            is_alive: true,
         };
 
         let mut name_to_index: UIHashMap<String, Vec<usize>> = UIHashMap::default();
@@ -84,7 +103,7 @@ impl<T> UITreeMap<T> {
     }
 
     pub fn has_node(&self, index: usize) -> bool {
-        index < self.nodes.len()
+        index < self.nodes.len() && self.nodes[index].is_alive
     }
 
     pub fn nodes(&self) -> &[UITreeNode<T>] {
@@ -100,6 +119,7 @@ impl<T> UITreeMap<T> {
             parent,
             children: Vec::with_capacity(15),
             data,
+            is_alive: true,
         };
 
         self.name_to_index
@@ -215,6 +235,10 @@ impl<T> UITreeMap<T> {
         }
 
         let node = &self.nodes[index];
+        // Skip dead (tombstone) nodes
+        if !node.is_alive {
+            return;
+        }
         callback(index, &node.data);
 
         for &child in &node.children {
@@ -236,6 +260,10 @@ impl<T> UITreeMap<T> {
         }
 
         let node = &self.nodes[index];
+        // Skip dead (tombstone) nodes
+        if !node.is_alive {
+            return;
+        }
         let prefix = " ".repeat(indent);
         println!("{}{}: {}", prefix, &node.name, display(&node.data));
 
@@ -273,6 +301,10 @@ impl<T> UITreeMap<T> {
         }
 
         let node = &self.nodes[index];
+        // Skip dead (tombstone) nodes
+        if !node.is_alive {
+            return Ok(());
+        }
         let prefix = " ".repeat(indent);
         writeln!(f, "{}{}: {}", prefix, node.name, display(&node.data))?;
 

@@ -230,7 +230,7 @@ impl UIExplorer {
         let app_name = caption.clone();
         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
         thread::spawn(|| {
-            get_all_elements_xml(tx, None, None, Some(app_name), None);
+            get_all_elements_xml(tx, None, None, Some(app_name), None, None);
         });
 
         let ui_tree = rx
@@ -1093,7 +1093,7 @@ impl eframe::App for UIExplorer {
                 let app_name = self.app_name.clone();
                 let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
                 thread::spawn(|| {
-                    get_all_elements_xml(tx, None, None, Some(app_name), None);
+                    get_all_elements_xml(tx, None, None, Some(app_name), None, None);
                 });
                 self.app_mode = AppMode::IsRefreshingTree(rx);
                 state.active_element = None;

@@ -16,4 +16,8 @@ pub enum UITreeError {
     /// Could not create a UIAutomation instance (COM may not be initialized).
     #[error("UIAutomation instance creation failed")]
     NoUIAutomation,
+
+    /// Tree construction was cancelled (e.g. due to timeout on the receiver side).
+    #[error("Tree construction cancelled")]
+    Cancelled,
 }

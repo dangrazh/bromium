@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
@@ -589,8 +591,10 @@ impl ElementIterator {
 pub struct WinDriver {
     timeout_ms: u64,
     ui_tree: UITreeXML,
-    tree_needs_update: bool,
     window_title: Option<String>,
+    /// Cancellation flag for the most recently spawned tree-construction thread.
+    /// Set to `true` on timeout to signal the orphaned thread to exit early.
+    cancel_flag: Arc<AtomicBool>,
 }
 
 impl WinDriver {
@@ -640,17 +644,21 @@ impl WinDriver {
         }
 
         // get the ui tree in a separate thread
+        let cancel_flag = Arc::new(AtomicBool::new(false));
         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
         let window_title_clone = window_title.clone();
-        thread::spawn(|| {
+        let cancel_clone = Some(Arc::clone(&cancel_flag));
+        thread::spawn(move || {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, Some(2), None, window_title_clone);
+            get_all_elements_xml(tx, None, Some(2), None, window_title_clone, cancel_clone);
         });
         info!("Spawned separate thread to get ui tree");
 
         let ui_tree: UITreeXML = rx
             .recv_timeout(Duration::from_secs(120))
             .map_err(|e| {
+                // Signal the orphaned thread to stop
+                cancel_flag.store(true, Ordering::Relaxed);
                 error!("UI tree creation timed out or channel error: {}", e);
                 TreeConstructionError::new_err(format!(
                     "UI tree creation timed out or channel error: {}",
@@ -669,8 +677,8 @@ impl WinDriver {
         let driver = WinDriver {
             timeout_ms,
             ui_tree,
-            tree_needs_update: false,
             window_title,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         };
 
         info!("WinDriver successfully created");
@@ -888,13 +896,29 @@ impl WinDriver {
                 let start_time = std::time::Instant::now();
                 while start_time.elapsed().as_millis() < effective_timeout as u128 {
                     let window_title_filter = self.window_title.clone();
-                    let tree_result = py.allow_threads(|| {
+                    // Cancel any previously orphaned tree-construction thread
+                    self.cancel_flag.store(true, Ordering::Relaxed);
+                    let cancel_flag = Arc::new(AtomicBool::new(false));
+                    self.cancel_flag = Arc::clone(&cancel_flag);
+                    let tree_result = py.allow_threads(move || {
                         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) =
                             channel();
+                        let cancel_clone = Some(cancel_flag.clone());
                         thread::spawn(move || {
-                            get_all_elements_xml(tx, None, None, None, window_title_filter);
+                            get_all_elements_xml(
+                                tx,
+                                None,
+                                None,
+                                None,
+                                window_title_filter,
+                                cancel_clone,
+                            );
                         });
-                        rx.recv_timeout(Duration::from_secs(120))
+                        let result = rx.recv_timeout(Duration::from_secs(120));
+                        if result.is_err() {
+                            cancel_flag.store(true, Ordering::Relaxed);
+                        }
+                        result
                     });
                     self.ui_tree = tree_result
                         .map_err(|e| {
@@ -1111,21 +1135,29 @@ impl WinDriver {
     pub fn refresh_ui_tree(&mut self, window_title: Option<String>) -> PyResult<()> {
         debug!("WinDriver::refresh called.");
 
+        // Cancel any previously orphaned tree-construction thread
+        self.cancel_flag.store(true, Ordering::Relaxed);
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.cancel_flag = Arc::clone(&cancel_flag);
+
         // handle optional window title parameter
         // if a window title is provided, use it to filter the UI tree and
         // ignore the potentially stored window title in the WinDriver instance
         let window_title_filter = window_title.or_else(|| self.window_title.clone());
         // get the ui tree in a separate thread
         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-        thread::spawn(|| {
+        let cancel_clone = Some(Arc::clone(&cancel_flag));
+        thread::spawn(move || {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, None, None, window_title_filter);
+            get_all_elements_xml(tx, None, None, None, window_title_filter, cancel_clone);
         });
         info!("Spawned separate thread to refresh ui tree");
 
         let ui_tree = rx
             .recv_timeout(Duration::from_secs(120))
             .map_err(|e| {
+                // Signal the orphaned thread to stop
+                cancel_flag.store(true, Ordering::Relaxed);
                 TreeConstructionError::new_err(format!(
                     "UI tree refresh failed (timeout or channel error): {}",
                     e
@@ -1136,7 +1168,6 @@ impl WinDriver {
             })?;
 
         self.ui_tree = ui_tree;
-        self.tree_needs_update = false;
 
         info!("UITree successfully refreshed");
         debug!(
@@ -1153,15 +1184,24 @@ impl WinDriver {
     /// Used internally by `launch_or_activate_app` for fast re-scans.
     pub fn refresh_ui_tree_top_2(&mut self) -> PyResult<()> {
         debug!("WinDriver::refresh_ui_tree_top_2 called.");
+
+        // Cancel any previously orphaned tree-construction thread
+        self.cancel_flag.store(true, Ordering::Relaxed);
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.cancel_flag = Arc::clone(&cancel_flag);
+
         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-        thread::spawn(|| {
+        let cancel_clone = Some(Arc::clone(&cancel_flag));
+        thread::spawn(move || {
             debug!("Spawning thread to get UI tree (depth=2)");
-            get_all_elements_xml(tx, None, Some(2_usize), None, None);
+            get_all_elements_xml(tx, None, Some(2_usize), None, None, cancel_clone);
         });
 
         let ui_tree = rx
             .recv_timeout(Duration::from_secs(120))
             .map_err(|e| {
+                // Signal the orphaned thread to stop
+                cancel_flag.store(true, Ordering::Relaxed);
                 TreeConstructionError::new_err(format!(
                     "UI tree refresh failed (timeout or channel error): {}",
                     e
@@ -1172,7 +1212,6 @@ impl WinDriver {
             })?;
 
         self.ui_tree = ui_tree;
-        self.tree_needs_update = false;
 
         info!("UITree successfully refreshed (shallow)");
         Ok(())

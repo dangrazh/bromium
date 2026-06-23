@@ -9,6 +9,10 @@ use std::sync::mpsc::Sender;
 use uiautomation::core::UIAutomation;
 use uiautomation::{UIElement, UITreeWalker};
 
+/// Hard upper bound on sibling iterations to prevent infinite loops
+/// from COM UIAutomation cycles (e.g. crashed or hung processes).
+const MAX_SIBLINGS: usize = 10_000;
+
 pub fn get_all_elements(tx: Sender<Result<UITree, UITreeError>>, max_depth: Option<usize>) {
     let automation = match UIAutomation::new() {
         Ok(a) => a,
@@ -129,7 +133,16 @@ fn get_element(
             max_depth,
         );
         let mut next = child;
+        let mut sibling_count: usize = 0;
         while let Ok(sibling) = walker.get_next_sibling(&next) {
+            sibling_count += 1;
+            if sibling_count > MAX_SIBLINGS {
+                log::warn!(
+                    "Sibling loop exceeded {MAX_SIBLINGS} iterations at depth {}, breaking to prevent infinite loop",
+                    level + 1
+                );
+                break;
+            }
             if level + 1 == 1 {
                 z_order += 1;
             }

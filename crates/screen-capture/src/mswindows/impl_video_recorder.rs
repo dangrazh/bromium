@@ -66,18 +66,28 @@ pub fn texture_to_frame(
             Some(&mut mapped),
         )?;
 
-        // Get a slice of bytes
-        let bgra = slice::from_raw_parts(
-            mapped.pData.cast(),
-            (source_desc.Height * mapped.RowPitch) as usize,
+        // Copy pixel data row-by-row, skipping GPU alignment padding.
+        // GPU textures often have RowPitch > Width * 4 due to alignment;
+        // we must only copy the actual pixel bytes per row.
+        let row_bytes = (source_desc.Width * 4) as usize;
+        let row_pitch = mapped.RowPitch as usize;
+        let src = slice::from_raw_parts(
+            mapped.pData.cast::<u8>(),
+            (source_desc.Height as usize) * row_pitch,
         );
+
+        let mut tightly_packed = Vec::with_capacity((source_desc.Height as usize) * row_bytes);
+        for row in 0..source_desc.Height as usize {
+            let row_start = row * row_pitch;
+            tightly_packed.extend_from_slice(&src[row_start..row_start + row_bytes]);
+        }
 
         d3d_context.Unmap(Some(&resource), 0);
 
         Ok(Frame::new(
             source_desc.Width,
             source_desc.Height,
-            bgra_to_rgba(bgra.to_owned()),
+            bgra_to_rgba(tightly_packed),
         ))
     }
 }

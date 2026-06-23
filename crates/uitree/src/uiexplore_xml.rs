@@ -13,11 +13,17 @@ use quick_xml::Writer;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use std::collections::HashSet;
 use std::io::Cursor;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 
 use uiautomation::{UIElement, UITreeWalker};
 
 use log::{debug, error, info, trace, warn};
+
+/// Hard upper bound on sibling iterations to prevent infinite loops
+/// from COM UIAutomation cycles (e.g. crashed or hung processes).
+const MAX_SIBLINGS: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct UITree {
@@ -50,6 +56,10 @@ impl UITree {
         }
         let mut map = vec![0; tree.node_count()];
         for (i, slot) in map.iter_mut().enumerate() {
+            // Skip dead (tombstone) nodes — leave their mapping at 0
+            if !tree.node(i).is_alive {
+                continue;
+            }
             if let Some(&pos) = rtid_to_pos.get(&tree.node(i).runtime_id) {
                 *slot = pos;
             }
@@ -120,6 +130,10 @@ impl UITree {
         }
 
         let node = &self.tree.nodes()[index];
+        // Skip dead (tombstone) nodes
+        if !node.is_alive {
+            return;
+        }
         let prefix = " ".repeat(indent);
         let elem_pos = self.node_to_elem[index];
         let elem = self.ui_elements[elem_pos].get_element_props();
@@ -391,6 +405,7 @@ pub fn get_all_elements_xml(
     max_depth: Option<usize>,
     calling_window_caption: Option<String>,
     target_window_caption: Option<String>,
+    cancel: Option<Arc<AtomicBool>>,
 ) {
     info!(
         "Starting UI element retrieval with max depth: {:?} and window title filters: calling_window_caption='{}', target_window_caption='{}'",
@@ -469,7 +484,15 @@ pub fn get_all_elements_xml(
             calling_window_caption.as_deref(),
             target_window_caption.as_deref(),
             &mut tree_path,
+            cancel.as_ref(),
         );
+    }
+
+    // Check cancellation before sending results
+    if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+        info!("Tree construction cancelled, discarding partial results");
+        let _ = tx.send(Err(UITreeError::Cancelled));
+        return;
     }
 
     let xml_dom_tree = String::from_utf8(xml_writer.into_inner().into_inner()).unwrap_or_default();
@@ -507,6 +530,7 @@ pub fn get_all_elements_par_xml(
     max_depth: Option<usize>,
     calling_window_caption: Option<String>,
     target_window_caption: Option<String>,
+    cancel: Option<Arc<AtomicBool>>,
 ) {
     info!(
         "Starting parallel UI element retrieval with max depth: {:?} and window title filters: calling_window_caption='{}', target_window_caption='{}'",
@@ -571,6 +595,7 @@ pub fn get_all_elements_par_xml(
             calling_window_caption.as_deref(),
             target_window_caption.as_deref(),
             &mut tree_path,
+            cancel.as_ref(),
         );
     }
 
@@ -627,6 +652,7 @@ pub fn get_all_elements_par_xml(
         let tx_par_clone = tx_par.clone();
         let calling_window_caption_n = calling_window_caption.clone();
         let target_window_caption_n = target_window_caption.clone();
+        let cancel_clone = cancel.clone();
         debug!(
             "Spawning thread to process element: '{}'",
             element.get_name()
@@ -638,6 +664,7 @@ pub fn get_all_elements_par_xml(
                 max_depth,
                 calling_window_caption_n,
                 target_window_caption_n,
+                cancel_clone,
             );
         });
         handles.push(handle);
@@ -708,7 +735,13 @@ fn get_element(
     calling_window_caption: Option<&str>,
     target_window_caption: Option<&str>,
     tree_path: &mut String,
+    cancel: Option<&Arc<AtomicBool>>,
 ) {
+    // Check cancellation flag before processing each element
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return;
+    }
+
     if let Some(limit) = max_depth
         && level > limit
     {
@@ -811,9 +844,23 @@ fn get_element(
             calling_window_caption,
             target_window_caption,
             tree_path,
+            cancel,
         );
         let mut next = child;
+        let mut sibling_count: usize = 0;
         while let Ok(sibling) = walker.get_next_sibling(&next) {
+            sibling_count += 1;
+            if sibling_count > MAX_SIBLINGS {
+                warn!(
+                    "Sibling loop exceeded {MAX_SIBLINGS} iterations at depth {}, breaking to prevent infinite loop",
+                    level + 1
+                );
+                break;
+            }
+            // Check cancellation in sibling loop
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return;
+            }
             if level + 1 == 1 {
                 z_order += 1;
             }
@@ -834,6 +881,7 @@ fn get_element(
                 calling_window_caption,
                 target_window_caption,
                 tree_path,
+                cancel,
             );
             next = sibling;
         }
