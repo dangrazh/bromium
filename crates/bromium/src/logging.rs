@@ -178,15 +178,21 @@ pub fn init_logger(
     *LOG_TO_FILE.lock().unwrap_or_else(|e| e.into_inner()) = enable_file.unwrap_or(true);
 
     INIT.call_once(|| {
-        log::set_logger(&LOGGER)
-            .map(|()| log::set_max_level(LevelFilter::Trace))
-            .expect("Failed to initialize logger");
-
-        set_log_level_internal(log_level);
-
-        log::info!("Logger initialized with log level: {}", log_level);
-        log::info!("Default log file: {}", log_file.display());
+        if let Err(e) = log::set_logger(&LOGGER) {
+            eprintln!(
+                "Failed to install bromium logger (another logger may already be active): {e}"
+            );
+            return;
+        }
+        log::set_max_level(LevelFilter::Trace);
+        log::info!(
+            "Logger initialized. Default log file: {}",
+            log_file.display()
+        );
     });
+
+    // Always apply the requested log level, even on repeated calls
+    set_log_level_internal(log_level);
 }
 
 pub fn set_log_level_internal(level: LevelFilter) {

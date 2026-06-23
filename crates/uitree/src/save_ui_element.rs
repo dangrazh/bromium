@@ -134,9 +134,12 @@ impl SaveUIElement {
             self.runtime_id
         );
 
-        let Some(uia) = get_ui_automation_instance() else {
-            error!("Failed to create UIAutomation instance");
-            return None;
+        let uia = match get_ui_automation_instance() {
+            Ok(a) => a,
+            Err(e) => {
+                error!("Failed to create UIAutomation instance: {}", e);
+                return None;
+            }
         };
 
         // Fast path: O(1) lookup by window handle when available

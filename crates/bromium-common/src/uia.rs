@@ -1,39 +1,34 @@
 use log::{debug, error, info, warn};
 use uiautomation::{UIAutomation, UIElement};
 
-pub fn get_ui_automation_instance() -> Option<UIAutomation> {
+pub fn get_ui_automation_instance() -> Result<UIAutomation, uiautomation::Error> {
     debug!("Creating UIAutomation instance");
 
-    let uia: UIAutomation;
-    let uia_res = UIAutomation::new();
-
-    match uia_res {
-        Ok(uia_ok) => {
-            uia = uia_ok;
+    match UIAutomation::new() {
+        Ok(uia) => {
             info!("UIAutomation instance created successfully");
+            Ok(uia)
         }
         Err(e) => {
             warn!(
                 "Failed to create UIAutomation instance, trying direct method: {:?}",
                 e
             );
-            let uia_direct_res = UIAutomation::new_direct();
-            match uia_direct_res {
-                Ok(uia_direct_ok) => {
-                    uia = uia_direct_ok;
+            match UIAutomation::new_direct() {
+                Ok(uia) => {
                     info!("UIAutomation instance created successfully using direct method.");
+                    Ok(uia)
                 }
                 Err(e_direct) => {
                     error!(
                         "Failed to create UIAutomation instance using direct method: {:?}",
                         e_direct
                     );
-                    return None;
+                    Err(e_direct)
                 }
             }
         }
     }
-    Some(uia)
 }
 
 pub struct RuntimeIdFilter(pub Vec<i32>);
@@ -54,12 +49,12 @@ mod tests {
         use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
         let _result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         let uia = get_ui_automation_instance();
-        assert!(uia.is_some(), "Failed to create UIAutomation instance");
+        assert!(uia.is_ok(), "Failed to create UIAutomation instance");
     }
 
     #[test]
     fn test_ui_automation_creation_mta() {
         let uia = get_ui_automation_instance();
-        assert!(uia.is_some(), "Failed to create UIAutomation instance");
+        assert!(uia.is_ok(), "Failed to create UIAutomation instance");
     }
 }

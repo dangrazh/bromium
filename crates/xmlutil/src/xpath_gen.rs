@@ -10,6 +10,36 @@ pub enum XpathGenError {
     ElementNotFound(String),
 }
 
+/// Encode a value as an XPath string literal, handling embedded quotes.
+///
+/// - If the value contains no single quotes, wrap in single quotes: `'value'`
+/// - If the value contains no double quotes, wrap in double quotes: `"value"`
+/// - If both, emit a `concat(...)` expression that splits around the quotes.
+fn xpath_string_literal(value: &str) -> String {
+    if !value.contains('\'') {
+        format!("'{}'", value)
+    } else if !value.contains('"') {
+        format!("\"{}\"", value)
+    } else {
+        // Value contains both quote types — use concat()
+        let mut parts = Vec::new();
+        let mut remaining = value;
+        while !remaining.is_empty() {
+            if let Some(pos) = remaining.find('\'') {
+                if pos > 0 {
+                    parts.push(format!("'{}'", &remaining[..pos]));
+                }
+                parts.push("\"'\"".to_string());
+                remaining = &remaining[pos + 1..];
+            } else {
+                parts.push(format!("'{}'", remaining));
+                remaining = "";
+            }
+        }
+        format!("concat({})", parts.join(","))
+    }
+}
+
 struct AttributeIndex {
     id_counts: HashMap<String, usize>,
     name_counts: HashMap<String, usize>,
@@ -70,7 +100,8 @@ fn is_attribute_with_ct_unique(index: &AttributeIndex, node: Node) -> bool {
 fn get_xpath_robula(index: &AttributeIndex, node: Node, simple_xpath: bool) -> String {
     for attr in ["id", "name"] {
         if is_attribute_unique(index, node, attr) {
-            return format!("//*[@{}='{}']", attr, node.attribute(attr).unwrap());
+            let lit = xpath_string_literal(node.attribute(attr).unwrap());
+            return format!("//*[@{}={}]", attr, lit);
         }
     }
 
@@ -82,7 +113,8 @@ fn get_xpath_robula(index: &AttributeIndex, node: Node, simple_xpath: bool) -> S
             let tag = n.tag_name().name();
 
             if !simple_xpath && is_attribute_with_ct_unique(index, n) {
-                path_parts.push(format!("{}[@Name='{}']", tag, n.attribute("Name").unwrap()));
+                let lit = xpath_string_literal(n.attribute("Name").unwrap());
+                path_parts.push(format!("{}[@Name={}]", tag, lit));
             } else {
                 let parent = n.parent();
                 let same_tag_count = parent.map_or(1, |p| {
@@ -276,5 +308,38 @@ mod tests {
     fn test_third_sibling_index() {
         let result = get_xpath_full_from_runtime_id("rt-item3", TEST_XML, true).unwrap();
         assert_eq!(result, "/Root/List/Item[3]");
+    }
+
+    // ─── xpath_string_literal tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_xpath_literal_no_quotes() {
+        assert_eq!(xpath_string_literal("hello"), "'hello'");
+    }
+
+    #[test]
+    fn test_xpath_literal_with_apostrophe() {
+        assert_eq!(xpath_string_literal("Bob's App"), "\"Bob's App\"");
+    }
+
+    #[test]
+    fn test_xpath_literal_with_double_quote() {
+        assert_eq!(xpath_string_literal(r#"Say "Hi""#), r#"'Say "Hi"'"#);
+    }
+
+    #[test]
+    fn test_xpath_literal_with_both_quotes() {
+        let result = xpath_string_literal(r#"It's a "test""#);
+        assert_eq!(result, r#"concat('It',"'",'s a "test"')"#);
+    }
+
+    #[test]
+    fn test_xpath_with_apostrophe_in_name() {
+        // Name with apostrophe should produce double-quoted XPath literal
+        let xml = r#"<Root ControlType="Window" Name="Bob&apos;s App" RtID="rt-root">
+  <Button ControlType="Button" Name="Click" RtID="rt-btn"/>
+</Root>"#;
+        let result = get_xpath_full_from_runtime_id("rt-root", xml, false).unwrap();
+        assert_eq!(result, r#"/Root[@Name="Bob's App"]"#);
     }
 }

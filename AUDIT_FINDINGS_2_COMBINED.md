@@ -631,17 +631,17 @@ Address memory safety, infinite loops, and hang/crash risks. Ship before any rel
 | 5 | ✅ | **R-05** Add cancellation flag + bounded refresh for spawned threads | CF-03 | Medium |
 | 6 | ✅ | **R-06** Fix tombstone handling in UITreeMap | CF-04 | Small |
 
-### Phase 3 — Correctness & Error Handling
+### Phase 3 — Correctness & Error Handling ✅
 
 Fix data corruption risks, XPath generation bugs, and replace panics with proper error propagation.
 
-| Step | Action | Finding | Effort |
-|------|--------|---------|--------|
-| 7 | **R-07** Add XPath string literal encoder for quoted names | CF-06 | Medium |
-| 8 | **R-08** Change `get_ui_automation_instance` to return `Result` | CF-12 | Small |
-| 9 | **R-09** Replace `.expect()` with error propagation in `create_hook` | CF-13 | Trivial |
-| 10 | **R-10** Propagate XML write errors instead of discarding | CF-14 | Small |
-| 11 | **R-11** Fix logger initialization: repeated calls + panic risk | CF-15 | Small |
+| Step | | Action | Finding | Effort |
+|------|--|--------|---------|--------|
+| 7 | ✅ | **R-07** Add XPath string literal encoder for quoted names | CF-06 | Medium |
+| 8 | ✅ | **R-08** Change `get_ui_automation_instance` to return `Result` | CF-12 | Small |
+| 9 | ✅ | **R-09** Replace `.expect()` with error propagation in `create_hook` | CF-13 | Trivial |
+| 10 | ✅ | **R-10** Propagate XML write errors instead of discarding | CF-14 | Small |
+| 11 | ✅ | **R-11** Fix logger initialization: repeated calls + panic risk | CF-15 | Small |
 
 ### Phase 4 — Structural Consolidation
 

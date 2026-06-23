@@ -413,10 +413,13 @@ pub fn get_all_elements_xml(
         calling_window_caption.as_deref().unwrap_or("none"),
         target_window_caption.as_deref().unwrap_or("none")
     );
-    let Some(automation) = get_ui_automation_instance() else {
-        error!("Failed to create UIAutomation instance");
-        let _ = tx.send(Err(UITreeError::NoUIAutomation));
-        return;
+    let automation = match get_ui_automation_instance() {
+        Ok(a) => a,
+        Err(e) => {
+            error!("Failed to create UIAutomation instance: {}", e);
+            let _ = tx.send(Err(UITreeError::NoUIAutomation));
+            return;
+        }
     };
     let walker = match automation.get_control_view_walker() {
         Ok(w) => w,
@@ -538,10 +541,13 @@ pub fn get_all_elements_par_xml(
         calling_window_caption.as_deref().unwrap_or("none"),
         target_window_caption.as_deref().unwrap_or("none")
     );
-    let Some(automation) = get_ui_automation_instance() else {
-        error!("Failed to create UIAutomation instance");
-        let _ = tx.send(Err(UITreeError::NoUIAutomation));
-        return;
+    let automation = match get_ui_automation_instance() {
+        Ok(a) => a,
+        Err(e) => {
+            error!("Failed to create UIAutomation instance: {}", e);
+            let _ = tx.send(Err(UITreeError::NoUIAutomation));
+            return;
+        }
     };
     let walker = match automation.get_control_view_walker() {
         Ok(w) => w,
@@ -821,7 +827,13 @@ fn get_element(
     } else {
         start.push_attribute(("ControlType", ui_elem_props.get_control_type()));
     }
-    let _ = xml_writer.write_event(Event::Start(start));
+    if let Err(e) = xml_writer.write_event(Event::Start(start)) {
+        error!(
+            "Failed to write XML start event for '{}': {}",
+            control_type_tag, e
+        );
+        return;
+    }
 
     let ui_elem_in_tree = UIElementInTree::new(ui_elem_props, parent);
     ui_elements.push(ui_elem_in_tree);
@@ -887,7 +899,12 @@ fn get_element(
         }
     }
 
-    let _ = xml_writer.write_event(Event::End(BytesEnd::new(&control_type_tag)));
+    if let Err(e) = xml_writer.write_event(Event::End(BytesEnd::new(&control_type_tag))) {
+        error!(
+            "Failed to write XML end event for '{}': {}",
+            control_type_tag, e
+        );
+    }
     tree_path.truncate(prev_tree_path_len);
 }
 

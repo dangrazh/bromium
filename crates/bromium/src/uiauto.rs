@@ -8,7 +8,7 @@ use bromium_common::{RuntimeIdFilter, get_ui_automation_instance};
 pub fn get_ui_element_by_runtimeid(runtime_id: Vec<i32>) -> Option<UIElement> {
     debug!("Searching for element with runtime id: {:?}", runtime_id);
     // let automation = UIAutomation::new().unwrap();
-    let uia = get_ui_automation_instance()?;
+    let uia = get_ui_automation_instance().ok()?;
     let matcher = uia
         .create_matcher()
         .timeout(0)
@@ -95,7 +95,7 @@ mod tests {
         let _result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
 
         let uia = get_ui_automation_instance();
-        assert!(uia.is_some(), "Failed to create UIAutomation instance");
+        assert!(uia.is_ok(), "Failed to create UIAutomation instance");
     }
 
     #[test]
@@ -103,6 +103,6 @@ mod tests {
         debug!("UIAutomation::test_ui_automation_creation_mta called.");
 
         let uia = get_ui_automation_instance();
-        assert!(uia.is_some(), "Failed to create UIAutomation instance");
+        assert!(uia.is_ok(), "Failed to create UIAutomation instance");
     }
 }

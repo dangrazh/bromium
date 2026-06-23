@@ -25,7 +25,8 @@ impl Default for WinEventMonitor {
 impl WinEventMonitor {
     pub fn new() -> Self {
         let mouse_hwnd: HWND = HWND::default();
-        let (hook, rx) = create_hook();
+        let (hook, rx) =
+            create_hook().expect("Failed to install WinEvent hook — is the event loop running?");
         let last_hwnd: HWND = HWND::default();
 
         WinEventMonitor {
@@ -34,6 +35,20 @@ impl WinEventMonitor {
             last_hwnd,
             mouse_hwnd,
         }
+    }
+
+    /// Create a new `WinEventMonitor`, returning an error if hook installation fails.
+    pub fn try_new() -> Result<Self, win_event_hook::errors::Error> {
+        let mouse_hwnd: HWND = HWND::default();
+        let (hook, rx) = create_hook()?;
+        let last_hwnd: HWND = HWND::default();
+
+        Ok(WinEventMonitor {
+            hook,
+            rx_channel: rx,
+            last_hwnd,
+            mouse_hwnd,
+        })
     }
 
     pub fn check_for_events(&mut self) -> Vec<WinEvtMonitorEvent> {
@@ -102,7 +117,7 @@ fn create_event_handler(
     }
 }
 
-fn create_hook() -> (WinEventHook, Receiver<WinEventInfo>) {
+fn create_hook() -> Result<(WinEventHook, Receiver<WinEventInfo>), win_event_hook::errors::Error> {
     // Create channel for communication
     let (tx, rx): (Sender<WinEventInfo>, Receiver<WinEventInfo>) = channel();
 
@@ -142,7 +157,6 @@ fn create_hook() -> (WinEventHook, Receiver<WinEventInfo>) {
     // Create handler and install hook
     printfmt!("Installing hook");
     let handler = create_event_handler(tx);
-    let hook = win_event_hook::WinEventHook::install(config, handler)
-        .expect("Failed to install WinEvent hook");
-    (hook, rx)
+    let hook = win_event_hook::WinEventHook::install(config, handler)?;
+    Ok((hook, rx))
 }
