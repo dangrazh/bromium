@@ -341,8 +341,11 @@ impl UITree {
 }
 
 fn remove_in_place(orig: &mut Vec<UIElementInTree>, check: &[UIElementInTree]) {
-    let set: HashSet<_> = check.iter().cloned().collect();
-    orig.retain(|x| !set.contains(x));
+    let ids: HashSet<Vec<i32>> = check
+        .iter()
+        .map(|e| e.get_element_props().get_runtime_id().to_vec())
+        .collect();
+    orig.retain(|x| !ids.contains(x.get_element_props().get_runtime_id()));
 }
 
 fn append_or_replace_node_by_rt_id(
@@ -743,9 +746,10 @@ fn get_element(
         info!("Processed {} UI elements so far...", element_count);
     }
 
+    let element_name = element.get_name().unwrap_or_default();
+
     if let Some(caption) = calling_window_caption
-        && let Ok(name) = element.get_name()
-        && name == caption
+        && element_name == caption
     {
         trace!("Skipping element with caption: {}", caption);
         return;
@@ -753,21 +757,17 @@ fn get_element(
     let prev_tree_path_len = tree_path.len();
 
     if level > 0 {
-        let name = if element
-            .get_name()
-            .unwrap_or("Unnamed".to_string())
-            .is_empty()
-        {
-            "Unnamed".to_string()
+        let name = if element_name.is_empty() {
+            "Unnamed"
         } else {
-            element.get_name().unwrap_or("Unnamed".to_string())
+            &element_name
         };
 
         if tree_path.is_empty() {
-            tree_path.push_str(&name);
+            tree_path.push_str(name);
         } else {
             tree_path.push('\\');
-            tree_path.push_str(&name);
+            tree_path.push_str(name);
         }
         trace!("Current tree path: {}", tree_path);
         if let Some(target_caption) = target_window_caption

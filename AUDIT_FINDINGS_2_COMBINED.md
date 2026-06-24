@@ -675,13 +675,13 @@ Low-risk optimisations, cleanup items, and CI hardening.
 
 | Step | Action | Finding | Effort |
 |------|--------|---------|--------|
-| 24 | **R-23** Cache `element.get_name()` in `get_element` | CF-11 | Trivial |
-| 25 | **R-24** Return `&str` from `Element` getters | CF-20 | Small |
-| 26 | **R-25** Use runtime ID set instead of full-element clone | CF-22 | Trivial |
-| 27 | **R-26** Eliminate per-frame `TreeState` clone | CF-21 | Small |
-| 28 | **R-27** Make `printfmt!` macro output atomic | CF-19 | Trivial |
-| 29 | **R-28** Repository hygiene cleanup | CF-25 | Trivial |
-| 30 | **R-30** Add Python package CI with maturin + pytest | CF-18 | Medium |
+| 24 | ✅ | **R-23** Cache `element.get_name()` in `get_element` | CF-11 | Trivial |
+| 25 | ✅ | **R-24** Return `&str` from `Element` getters | CF-20 | Small |
+| 26 | ✅ | **R-25** Use runtime ID set instead of full-element clone | CF-22 | Trivial |
+| 27 | ✅ | **R-26** Eliminate per-frame `TreeState` clone | CF-21 | Small |
+| 28 | ✅ | **R-27** Make `printfmt!` macro output atomic | CF-19 | Trivial |
+| 29 | ✅ | **R-28** Repository hygiene cleanup | CF-25 | Trivial |
+| 30 | ✅ | **R-30** Add Python package CI with maturin + pytest | CF-18 | Medium |
 
 ---
 

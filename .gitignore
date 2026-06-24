@@ -98,3 +98,6 @@ docs/_build/
 
 # tokensave
 .tokensave/
+
+# Workspace-member lock files (root Cargo.lock is authoritative)
+crates/*/Cargo.lock

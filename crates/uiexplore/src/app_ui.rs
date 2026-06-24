@@ -1002,14 +1002,9 @@ impl UIExplorer {
 
 impl eframe::App for UIExplorer {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // manage the TreeState
-        let mut state: TreeState;
-        if let Some(tree_state) = &self.tree_state {
-            //.active_element
-            state = tree_state.clone();
-        } else {
-            state = TreeState::new();
-        }
+        // Take ownership of the TreeState to avoid cloning every frame.
+        // It is stored back into self.tree_state at the end of update().
+        let mut state = self.tree_state.take().unwrap_or_else(TreeState::new);
 
         if state.refresh_path_to_active_ui_element {
             state.update_path_to_active_ui_element(&self.ui_tree);

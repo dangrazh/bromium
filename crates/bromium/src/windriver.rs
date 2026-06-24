@@ -185,14 +185,14 @@ impl Element {
 
     /// The name of the UI element.
     #[getter]
-    pub fn name(&self) -> String {
-        self.name.clone()
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// The XPath locator for this element within the UI tree.
     #[getter]
-    pub fn xpath(&self) -> String {
-        self.xpath.clone()
+    pub fn xpath(&self) -> &str {
+        &self.xpath
     }
 
     /// The native window handle (HWND) of this element.
@@ -203,8 +203,8 @@ impl Element {
 
     /// The UI Automation control type (e.g. "Button", "Edit", "Window").
     #[getter]
-    pub fn control_type(&self) -> String {
-        self.control_type.clone()
+    pub fn control_type(&self) -> &str {
+        &self.control_type
     }
 
     /// The runtime ID uniquely identifying this element in the current session.
