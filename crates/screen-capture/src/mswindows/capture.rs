@@ -239,6 +239,14 @@ pub fn capture_window(hwnd: HWND, scale_factor: f32) -> ScreenCaptureResult<Rgba
             .is_ok();
         }
 
+        if !is_success {
+            return Err(ScreenCaptureError::new(format!(
+                "All window capture strategies failed for HWND {:?} (GetLastError: {:?})",
+                hwnd,
+                GetLastError()
+            )));
+        }
+
         SelectObject(*scope_guard_hdc_mem, previous_object);
 
         let image = to_rgba_image(*scope_guard_hdc_mem, *scope_guard_h_bitmap, width, height)?;

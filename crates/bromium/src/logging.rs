@@ -12,16 +12,12 @@ struct LogFileState {
 }
 
 impl LogFileState {
-    fn open(path: PathBuf) -> Option<Self> {
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .ok()
-            .map(|file| Self {
-                path,
-                writer: BufWriter::new(file),
-            })
+    fn open(path: PathBuf) -> std::io::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        Ok(Self {
+            path,
+            writer: BufWriter::new(file),
+        })
     }
 }
 
@@ -83,7 +79,7 @@ impl log::Log for BromiumLogger {
             if *LOG_TO_FILE.lock().unwrap_or_else(|e| e.into_inner()) {
                 let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
                 if state.is_none() {
-                    *state = LogFileState::open(get_default_log_file());
+                    *state = LogFileState::open(get_default_log_file()).ok();
                 }
                 if let Some(ref mut s) = *state {
                     let _ = writeln!(s.writer, "{}", log_message);
@@ -172,7 +168,14 @@ pub fn init_logger(
 
     let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
     let log_file = log_path.join(format!("bromium_{}.log", timestamp));
-    *LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()) = LogFileState::open(log_file.clone());
+    let log_file_state = match LogFileState::open(log_file.clone()) {
+        Ok(state) => Some(state),
+        Err(e) => {
+            eprintln!("Failed to open log file {}: {}", log_file.display(), e);
+            None
+        }
+    };
+    *LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()) = log_file_state;
 
     *LOG_TO_CONSOLE.lock().unwrap_or_else(|e| e.into_inner()) = enable_console.unwrap_or(false);
     *LOG_TO_FILE.lock().unwrap_or_else(|e| e.into_inner()) = enable_file.unwrap_or(true);
@@ -228,7 +231,13 @@ pub fn set_log_file(path: String) -> PyResult<()> {
         if let Some(ref mut s) = *state {
             let _ = s.writer.flush();
         }
-        *state = LogFileState::open(path_buf.clone());
+        *state = Some(LogFileState::open(path_buf.clone()).map_err(|e| {
+            pyo3::exceptions::PyIOError::new_err(format!(
+                "Failed to open log file '{}': {}",
+                path_buf.display(),
+                e
+            ))
+        })?);
     }
 
     if *LOG_TO_FILE.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -255,7 +264,13 @@ pub fn set_log_directory(dir_path: String) -> PyResult<()> {
         if let Some(ref mut s) = *state {
             let _ = s.writer.flush();
         }
-        *state = LogFileState::open(log_file.clone());
+        *state = Some(LogFileState::open(log_file.clone()).map_err(|e| {
+            pyo3::exceptions::PyIOError::new_err(format!(
+                "Failed to open log file '{}': {}",
+                log_file.display(),
+                e
+            ))
+        })?);
     }
 
     log::info!("Log directory changed to: {}", dir_path);
@@ -268,7 +283,7 @@ pub fn get_log_file() -> PyResult<String> {
     let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
 
     if state.is_none() {
-        *state = LogFileState::open(get_default_log_file());
+        *state = LogFileState::open(get_default_log_file()).ok();
     }
 
     Ok(state
@@ -291,7 +306,13 @@ pub fn enable_file_logging(enable: bool) -> PyResult<()> {
         let mut state = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
         if state.is_none() {
             let default_path = get_default_log_file();
-            *state = LogFileState::open(default_path);
+            *state = Some(LogFileState::open(default_path.clone()).map_err(|e| {
+                pyo3::exceptions::PyIOError::new_err(format!(
+                    "Failed to open log file '{}': {}",
+                    default_path.display(),
+                    e
+                ))
+            })?);
         }
     }
 
@@ -312,7 +333,13 @@ pub fn reset_log_file() -> PyResult<()> {
         File::create(&path).map_err(|e| {
             pyo3::exceptions::PyIOError::new_err(format!("Failed to reset log file: {}", e))
         })?;
-        *state = LogFileState::open(path);
+        *state = Some(LogFileState::open(path.clone()).map_err(|e| {
+            pyo3::exceptions::PyIOError::new_err(format!(
+                "Failed to reopen log file '{}': {}",
+                path.display(),
+                e
+            ))
+        })?);
     } else {
         return Err(pyo3::exceptions::PyValueError::new_err("No log file set"));
     }

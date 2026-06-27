@@ -1,7 +1,8 @@
-use bromium_common::printfmt;
 use time::{Duration, OffsetDateTime as DateTime};
 use xmlutil::{XpathResult, xpath_eval};
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
@@ -224,17 +225,38 @@ pub struct UIExplorer {
 impl UIExplorer {
     #[allow(dead_code)]
     pub fn new(caption: String) -> Self {
-        // get the ui tree in a separate thread
         let app_name = caption.clone();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let cancel_clone = Some(Arc::clone(&cancel_flag));
         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-        thread::spawn(|| {
-            get_all_elements_xml(tx, None, None, Some(app_name), None, None);
+        thread::spawn(move || {
+            get_all_elements_xml(tx, None, None, Some(app_name), None, cancel_clone);
         });
 
-        let ui_tree = rx
-            .recv()
-            .expect("Failed to receive UI tree from thread")
-            .expect("UI tree build failed");
+        const TREE_TIMEOUT_SECS: u64 = 120;
+        let (ui_tree, status_msg) =
+            match rx.recv_timeout(std::time::Duration::from_secs(TREE_TIMEOUT_SECS)) {
+                Ok(Ok(tree)) => (tree, None),
+                Ok(Err(e)) => {
+                    cancel_flag.store(true, Ordering::Relaxed);
+                    let msg = format!("UI tree construction failed: {}", e);
+                    eprintln!("{}", msg);
+                    (
+                        UITreeXML::empty(),
+                        Some(AppStatusMsg::new_with_duration(msg, Duration::seconds(10))),
+                    )
+                }
+                Err(e) => {
+                    cancel_flag.store(true, Ordering::Relaxed);
+                    let msg = format!("UI tree construction timed out: {}", e);
+                    eprintln!("{}", msg);
+                    (
+                        UITreeXML::empty(),
+                        Some(AppStatusMsg::new_with_duration(msg, Duration::seconds(10))),
+                    )
+                }
+            };
+
         let app_context = AppContext::new_from_screen(0.4, 0.8);
 
         Self {
@@ -251,7 +273,7 @@ impl UIExplorer {
             ui_tree,
             tree_state: None,
             history: DeduplicatedHistory::default(),
-            status_msg: None,
+            status_msg,
             app_mode: AppMode::Normal(LastRefresh {
                 time: std::time::Instant::now(),
             }),
@@ -546,7 +568,7 @@ impl UIExplorer {
 
                 // clear any highlighted surrounding rectangle as
                 if new_highlight != prev_highlight && !new_highlight {
-                    printfmt!("Old highlight value was {}, new one is {}", prev_highlight, new_highlight);
+                    log::debug!("Old highlight value was {}, new one is {}", prev_highlight, new_highlight);
                     let rect: RECT = RECT {
                         left: 0,
                         top: 0,
@@ -592,7 +614,7 @@ impl UIExplorer {
                             .auto_shrink(false)
                             .show(ui, |ui| {
                                 ui.add_space(4.0);
-                                // printfmt!("running 'render_ui_tree' function on UIExplorer");
+                                // log::debug!("running 'render_ui_tree' function on UIExplorer");
                                 self.render_ui_tree(ui, state);
                             });
                     }
@@ -643,7 +665,7 @@ impl UIExplorer {
                     //             bottom: prev_bottom as i32,
                     //         };
                     //         if state.clear_frame { //rect != prev_rect &&
-                    //             printfmt!("Cleanup needed - new: {:?} vs old: {:?}", rect, prev_rect);
+                    //             log::debug!("Cleanup needed - new: {:?} vs old: {:?}", rect, prev_rect);
                     //             rectangle::clear_frame(prev_rect).unwrap();
                     //             rectangle::draw_frame(rect, 4).unwrap();
                     //             state.clear_frame = false;
@@ -863,7 +885,7 @@ impl UIExplorer {
         // frame around the active element on the screen (if highlighting is enabled)
         if self.xpath_highlighting {
             if let Some(elem) = self.ui_tree.get_element_by_xpath(xpath_input.as_str()) {
-                // printfmt!("Element found by xpath: {}", elem.get_name());
+                // log::debug!("Element found by xpath: {}", elem.get_name());
                 let runtime_id = elem
                     .get_runtime_id()
                     .iter()
@@ -876,15 +898,15 @@ impl UIExplorer {
                     .get_element_by_runtime_id(runtime_id.as_str())
                 {
                     let idx = node.index;
-                    // printfmt!("Index in tree: {}", idx);
+                    // log::debug!("Index in tree: {}", idx);
                     // update the state with the new active element
                     state.update_state(elem.clone(), idx);
                     self.process_highlighting(state);
                 } else {
-                    // printfmt!("Element not found in tree by runtime id");
+                    // log::debug!("Element not found in tree by runtime id");
                 }
             } else {
-                // printfmt!("No element found by xpath");
+                // log::debug!("No element found by xpath");
             }
         }
     }
@@ -893,8 +915,8 @@ impl UIExplorer {
     fn process_event(&mut self, event: &egui::Event, state: &mut TreeState) {
         match event {
             egui::Event::MouseMoved { .. } => {
-                // printfmt!("Mouse moved event received");
-                // printfmt!("Getting cursor position");
+                // log::debug!("Mouse moved event received");
+                // log::debug!("Getting cursor position");
 
                 let cursor_position = unsafe {
                     let mut cursor_pos = POINT::default();
@@ -903,13 +925,13 @@ impl UIExplorer {
                     cursor_pos.y = (cursor_pos.y as f32 / self.app_context.screen_scale) as i32;
                     cursor_pos
                 };
-                // printfmt!("getting bouding rectangle for cursor position: ({}, {})", cursor_position.x, cursor_position.y);
-                // printfmt!("Searching {} elements in the UI tree", self.ui_tree.get_elements().len());
+                // log::debug!("getting bouding rectangle for cursor position: ({}, {})", cursor_position.x, cursor_position.y);
+                // log::debug!("Searching {} elements in the UI tree", self.ui_tree.get_elements().len());
                 if let Some(ui_element_props) = rectangle::get_point_bounding_rect(
                     &cursor_position,
                     self.ui_tree.get_elements(),
                 ) {
-                    // printfmt!("Updating state with element found at cursor position: {}", ui_element_props.get_element_props().get_name());
+                    // log::debug!("Updating state with element found at cursor position: {}", ui_element_props.get_element_props().get_name());
                     state.update_state(
                         ui_element_props.get_element_props().clone(),
                         ui_element_props.get_tree_index(),
@@ -918,7 +940,7 @@ impl UIExplorer {
             }
             egui::Event::Key { key, pressed, .. } => {
                 // physical_key, repeat, modifiers
-                // printfmt!("Key event received: {:?}, pressed: {}", key, pressed);
+                // log::debug!("Key event received: {:?}, pressed: {}", key, pressed);
                 if key == &egui::Key::Escape && !*pressed {
                     // check if tracking is enabled, if yes, desable tracking
                     // if not, ignore the escape key
@@ -977,7 +999,7 @@ impl UIExplorer {
                 };
                 if state.clear_frame {
                     //rect != prev_rect &&
-                    printfmt!("Cleanup needed - new: {:?} vs old: {:?}", rect, prev_rect);
+                    log::debug!("Cleanup needed - new: {:?} vs old: {:?}", rect, prev_rect);
                     rectangle::clear_frame(prev_rect).unwrap();
                     rectangle::draw_frame(rect, 4).unwrap();
                     state.clear_frame = false;
@@ -1038,10 +1060,10 @@ impl eframe::App for UIExplorer {
                 // only if not currently recording (tracking) the cursor
                 if !self.recording && self.auto_refresh && last_refesh.time.elapsed().as_secs() > 2
                 {
-                    printfmt!("Checking for WinEvents");
+                    log::debug!("Checking for WinEvents");
                     let winevents = self.winevent_monitor.check_for_events();
                     if !winevents.is_empty() {
-                        printfmt!("Checked for WinEvents, found {} events", winevents.len());
+                        log::debug!("Checked for WinEvents, found {} events", winevents.len());
                         self.app_mode = AppMode::NeedsTreeRefresh;
                         self.set_status(
                             "UI Tree change detected, refreshing...".to_string(),

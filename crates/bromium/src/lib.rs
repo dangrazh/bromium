@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! # Bromium
 //!
 //! Rust bindings for the Bromium project, a Python library for interacting with the WinDriver API.

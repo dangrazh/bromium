@@ -1,5 +1,4 @@
-#[macro_use]
-mod macros;
+#![deny(unsafe_op_in_unsafe_fn)]
 
 mod timeout;
 pub use timeout::execute_with_timeout;

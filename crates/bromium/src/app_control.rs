@@ -102,7 +102,7 @@ pub fn launch_or_activate_application(
                                 success = true;
                                 let element_out = element.clone();
                                 info!("Running a full refresh of the UI tree after activation");
-                                win_driver.refresh_ui_tree(None).map_err(|e| {
+                                win_driver.refresh_ui_tree_internal(None).map_err(|e| {
                                     AppControlError::RefreshFailed(format!("{:?}", e))
                                 })?;
                                 result = Ok(element_out);

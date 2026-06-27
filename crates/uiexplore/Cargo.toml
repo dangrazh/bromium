@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 uiautomation.workspace = true
 chrono.workspace = true
+log.workspace = true
 windows.workspace = true
 
 # uiautomation = "0.21.2" # "0.13.4"

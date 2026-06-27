@@ -25,9 +25,3 @@ pub use uiexplore_xml::{UITree, get_all_elements_par_xml, get_all_elements_xml};
 
 /// Deprecated: use `UITree` directly.
 pub type UITreeXML = UITree;
-
-mod uiexplore;
-pub use uiexplore::get_all_elements;
-
-mod uiexplore_iter;
-pub use uiexplore_iter::get_all_elements_iterative;

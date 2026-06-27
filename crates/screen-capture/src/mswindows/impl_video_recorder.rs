@@ -2,6 +2,7 @@ use std::{
     slice,
     sync::{
         Arc,
+        atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, SyncSender, sync_channel},
     },
     thread,
@@ -98,6 +99,7 @@ pub struct ImplVideoRecorder {
     d3d_context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
     recorder_waker: Arc<RecorderWaker>,
+    shutdown: Arc<AtomicBool>,
     tx: SyncSender<Frame>,
 }
 
@@ -124,28 +126,39 @@ impl ImplVideoRecorder {
 
             let adapter = dxgi_device.GetAdapter()?;
 
+            // Find the output matching the requested monitor BEFORE duplicating
+            let mut matching_output = None;
             let mut output_index = 0;
-            loop {
-                let output = adapter.EnumOutputs(output_index)?;
+            while let Ok(output) = adapter.EnumOutputs(output_index) {
                 output_index += 1;
                 let output_desc = output.GetDesc()?;
-
-                let output1 = output.cast::<IDXGIOutput1>()?;
-                let duplication = output1.DuplicateOutput(&dxgi_device)?;
-
                 if output_desc.Monitor == h_monitor {
-                    let (tx, sx) = sync_channel(0);
-                    let s = Self {
-                        d3d_device,
-                        d3d_context,
-                        duplication,
-                        recorder_waker: Arc::new(RecorderWaker::new()),
-                        tx,
-                    };
-                    s.on_frame()?;
-                    return Ok((s, sx));
+                    matching_output = Some(output);
+                    break;
                 }
             }
+
+            let output = matching_output.ok_or_else(|| {
+                ScreenCaptureError::new(format!(
+                    "No DXGI output found for the requested monitor {:?}",
+                    h_monitor
+                ))
+            })?;
+
+            let output1 = output.cast::<IDXGIOutput1>()?;
+            let duplication = output1.DuplicateOutput(&dxgi_device)?;
+
+            let (tx, sx) = sync_channel(2);
+            let s = Self {
+                d3d_device,
+                d3d_context,
+                duplication,
+                recorder_waker: Arc::new(RecorderWaker::new()),
+                shutdown: Arc::new(AtomicBool::new(false)),
+                tx,
+            };
+            s.on_frame()?;
+            Ok((s, sx))
         }
     }
 
@@ -154,18 +167,26 @@ impl ImplVideoRecorder {
         let d3d_device = self.d3d_device.clone();
         let d3d_context = self.d3d_context.clone();
         let recorder_waker = self.recorder_waker.clone();
+        let shutdown = self.shutdown.clone();
         let tx = self.tx.clone();
 
         thread::spawn(move || {
             loop {
+                if shutdown.load(Ordering::Relaxed) {
+                    break Ok::<(), ScreenCaptureError>(());
+                }
+
                 recorder_waker.wait()?;
+
+                if shutdown.load(Ordering::Relaxed) {
+                    break Ok(());
+                }
 
                 let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
                 let mut resource: Option<IDXGIResource> = None;
                 unsafe {
                     match duplication.AcquireNextFrame(200, &mut frame_info, &mut resource) {
                         Err(err) => {
-                            // 尝试释放当前帧，不然不能获取到下一帧数据
                             let _ = duplication.ReleaseFrame();
                             if err.code() != DXGI_ERROR_WAIT_TIMEOUT {
                                 break Err::<(), ScreenCaptureError>(ScreenCaptureError::new(
@@ -174,17 +195,16 @@ impl ImplVideoRecorder {
                             }
                         }
                         _ => {
-                            // 如何确定 AcquireNextFrame 执行成功
                             if frame_info.LastPresentTime != 0 {
                                 let resource = resource
                                     .ok_or(ScreenCaptureError::new("AcquireNextFrame failed"))?;
                                 let source_texture = resource.cast::<ID3D11Texture2D>()?;
                                 let frame =
                                     texture_to_frame(&d3d_device, &d3d_context, source_texture)?;
-                                let _ = tx.send(frame);
+                                // Drop the frame if the receiver is full rather than blocking
+                                let _ = tx.try_send(frame);
                             }
 
-                            // 最后释放帧，不然获取不到当前帧的数据
                             duplication.ReleaseFrame()?;
                         }
                     }
@@ -200,7 +220,10 @@ impl ImplVideoRecorder {
         Ok(())
     }
     pub fn stop(&self) -> ScreenCaptureResult<()> {
+        self.shutdown.store(true, Ordering::Relaxed);
         self.recorder_waker.sleep()?;
+        // Wake the worker so it can observe the shutdown flag and exit
+        self.recorder_waker.wake()?;
 
         Ok(())
     }

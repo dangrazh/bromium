@@ -124,6 +124,8 @@ class Element:
 
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
+    def __eq__(self, other: "Element") -> bool: ...
+    def __hash__(self) -> int: ...
 
     # ─── Properties ───────────────────────────────────────────────────────
 
@@ -320,6 +322,14 @@ class WinDriver:
     def timeout_ms(self, value: int) -> None: ...
 
     @property
+    def tree_timeout_secs(self) -> int:
+        """Maximum seconds to wait for UI tree construction (default: 120)."""
+        ...
+
+    @tree_timeout_secs.setter
+    def tree_timeout_secs(self, value: int) -> None: ...
+
+    @property
     def element_count(self) -> int:
         """Number of UI elements currently in the tree."""
         ...
@@ -380,10 +390,7 @@ class WinDriver:
             xpath: The XPath locator string.
 
         Returns:
-            A list of matching Elements.
-
-        Raises:
-            ElementNotFoundError: If no elements match.
+            A list of matching Elements. Returns an empty list if none match.
         """
         ...
 

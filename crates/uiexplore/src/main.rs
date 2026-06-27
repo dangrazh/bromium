@@ -1,6 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-use bromium_common::printfmt;
 use windows::Win32::Foundation::{HANDLE, POINT};
 use windows::Win32::Graphics::Gdi::{MONITOR_FROM_FLAGS, MonitorFromPoint};
 use windows::Win32::UI::HiDpi::{
@@ -19,35 +18,49 @@ use app_ui::UIExplorer;
 use ::uiexplore::signal_file;
 use uitree::{UITreeError, UITreeXML, get_all_elements_xml};
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
+use std::time::Duration;
 
 use eframe::{NativeOptions, Renderer, egui};
 
 fn main() -> eframe::Result {
     let app_name = "UI Explore";
 
-    printfmt!("Getting the ui tree");
-    // get the ui tree in a separate thread
+    println!("Getting the ui tree");
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_clone = Some(Arc::clone(&cancel_flag));
     let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-    thread::spawn(|| {
-        get_all_elements_xml(tx, None, None, Some(app_name.to_string()), None, None);
+    thread::spawn(move || {
+        get_all_elements_xml(tx, None, None, Some(app_name.to_string()), None, cancel_clone);
     });
-    printfmt!("Spawned separate thread to get ui tree");
+    println!("Spawned separate thread to get ui tree");
 
-    printfmt!("displaying start screen now");
+    println!("displaying start screen now");
     let start_screen_pid = launch_start_screen();
 
-    let ui_tree = rx
-        .recv()
-        .expect("Failed to receive UI tree from thread")
-        .expect("UI tree build failed");
+    const TREE_TIMEOUT_SECS: u64 = 120;
+    let ui_tree = match rx.recv_timeout(Duration::from_secs(TREE_TIMEOUT_SECS)) {
+        Ok(Ok(tree)) => tree,
+        Ok(Err(e)) => {
+            cancel_flag.store(true, Ordering::Relaxed);
+            eprintln!("UI tree construction failed: {}", e);
+            UITreeXML::empty()
+        }
+        Err(e) => {
+            cancel_flag.store(true, Ordering::Relaxed);
+            eprintln!("UI tree construction timed out or channel error: {}", e);
+            UITreeXML::empty()
+        }
+    };
 
     // Signal the start_screen child (if launched) to close
     if let Some(pid) = start_screen_pid {
         let _ = signal_file::create_signal_file_for_pid(pid);
     }
-    printfmt!("UI Tree retrieved, setting up UIExplorer app...");
+    println!("UI Tree retrieved, setting up UIExplorer app...");
 
     // debugging only...
     // ui_tree.pretty_print_tree();
@@ -204,11 +217,11 @@ fn launch_start_screen() -> Option<u32> {
     match std::process::Command::new("start_screen.exe").spawn() {
         Ok(child) => {
             let pid = child.id();
-            printfmt!("Start Screen successfully launched (pid={})", pid);
+            println!("Start Screen successfully launched (pid={})", pid);
             Some(pid)
         }
         Err(_) => {
-            printfmt!("Failed to launch Start Screen");
+            println!("Failed to launch Start Screen");
             None
         }
     }

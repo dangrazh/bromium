@@ -1,5 +1,3 @@
-use bromium_common::printfmt;
-
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use win_event_hook::WinEventHook;
@@ -101,13 +99,13 @@ fn create_event_handler(
     tx: Sender<WinEventInfo>,
 ) -> impl Fn(Event, OpaqueHandle<WindowHandle>, i32, i32, u32, u32) {
     move |ev, ohwnd: OpaqueHandle<WindowHandle>, _, _, _, _| {
-        // printfmt!("Event received: {:?} on hwnd: {:?}", ev, ohwnd);
+        // log::debug!("Event received: {:?} on hwnd: {:?}", ev, ohwnd);
         tx.send(WinEventInfo {
             event: ev,
             hwnd: ohwnd,
         })
         .unwrap_or_else(|e| eprintln!("Failed to send event: {}", e));
-        // printfmt!("Event sent to channel");
+        // log::debug!("Event sent to channel");
     }
 }
 
@@ -149,7 +147,7 @@ fn create_hook() -> Result<(WinEventHook, Receiver<WinEventInfo>), win_event_hoo
         .finish();
 
     // Create handler and install hook
-    printfmt!("Installing hook");
+    log::info!("Installing hook");
     let handler = create_event_handler(tx);
     let hook = win_event_hook::WinEventHook::install(config, handler)?;
     Ok((hook, rx))

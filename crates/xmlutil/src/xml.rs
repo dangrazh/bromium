@@ -87,15 +87,15 @@ impl XMLAttributes {
 }
 
 impl IntoIterator for XMLAttributes {
-    type Item = Result<(String, String), Error>;
-    type IntoIter = Box<dyn Iterator<Item = Self::Item>>;
+    type Item = (String, String);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Box::new(
-            self.attributes
-                .into_iter()
-                .map(|attr| Ok((attr.name, attr.value))),
-        )
+        self.attributes
+            .into_iter()
+            .map(|attr| (attr.name, attr.value))
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
 
@@ -148,13 +148,8 @@ impl XMLWriter {
     ) -> Result<(), Error> {
         let mut start = BytesStart::new(name);
         if let Some(attributes) = attrs {
-            let mut key: &str;
-            let mut value: &str;
-            for attr in attributes.into_iter() {
-                let attrs = attr?;
-                key = attrs.0.as_str();
-                value = attrs.1.as_str();
-                start.push_attribute((key, value));
+            for (key, value) in attributes {
+                start.push_attribute((key.as_str(), value.as_str()));
             }
         }
 

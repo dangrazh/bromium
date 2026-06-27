@@ -31,6 +31,15 @@ pub struct UITree {
 }
 
 impl UITree {
+    pub fn empty() -> Self {
+        UITree {
+            tree: UITreeMap::new("Root".to_string(), String::new(), ()),
+            xml_dom_tree: String::new(),
+            ui_elements: Vec::new(),
+            node_to_elem: Vec::new(),
+        }
+    }
+
     pub fn new(
         tree: UITreeMap<()>,
         xml_dom_tree: String,
@@ -164,12 +173,31 @@ impl UITree {
         get_xpath_full_from_runtime_id(&node.runtime_id, self.get_xml_dom_tree(), simple_path)
     }
 
-    pub fn get_element_by_xpath(&self, xpath: &str) -> Option<&SaveUIElement> {
-        let xpath = if !xpath.ends_with("/@RtID") {
-            xpath.to_string() + "/@RtID"
+    /// Ensures the XPath expression ends with `/@RtID` so the query returns
+    /// runtime-ID attribute values. If the expression already ends with an
+    /// attribute selector (`/@SomeAttr`), it is replaced with `/@RtID`.
+    fn normalize_xpath_for_rtid(xpath: &str) -> String {
+        if xpath.ends_with("/@RtID") {
+            return xpath.to_string();
+        }
+        // Strip any existing trailing /@Attribute before appending /@RtID
+        let base = if let Some(pos) = xpath.rfind("/@") {
+            let after_slash = &xpath[pos..];
+            // Only strip if the trailing segment is a simple attribute name
+            // (no further path separators or predicates)
+            if !after_slash[2..].contains('/') && !after_slash[2..].contains('[') {
+                &xpath[..pos]
+            } else {
+                xpath
+            }
         } else {
-            xpath.to_string()
+            xpath
         };
+        format!("{base}/@RtID")
+    }
+
+    pub fn get_element_by_xpath(&self, xpath: &str) -> Option<&SaveUIElement> {
+        let xpath = Self::normalize_xpath_for_rtid(xpath);
 
         let xpath_result = eval_xpath(&xpath, self.get_xml_dom_tree());
 
@@ -201,11 +229,7 @@ impl UITree {
     }
 
     pub fn get_elements_by_xpath(&self, xpath: &str) -> Option<Vec<&SaveUIElement>> {
-        let xpath = if !xpath.ends_with("/@RtID") {
-            xpath.to_string() + "/@RtID"
-        } else {
-            xpath.to_string()
-        };
+        let xpath = Self::normalize_xpath_for_rtid(xpath);
 
         let xpath_result = eval_xpath(&xpath, self.get_xml_dom_tree());
         let mut results: Vec<&SaveUIElement> = Vec::new();
@@ -390,7 +414,7 @@ fn append_or_replace_node_by_rt_id(
     }
 }
 
-fn find_node_by_rt_id(xot: &mut xot::Xot, doc: xot::Node, target: &String) -> Option<xot::Node> {
+fn find_node_by_rt_id(xot: &mut xot::Xot, doc: xot::Node, target: &str) -> Option<xot::Node> {
     let rt_id_a = xot.add_name("RtID");
     let descendants = xot.descendants(doc);
     let rt_id_default = "n/a".to_string();

@@ -44,6 +44,9 @@ extern "system" fn monitor_enum_proc(
     _: *mut RECT,
     state: LPARAM,
 ) -> BOOL {
+    // SAFETY: `state` points to a valid `Vec<HMONITOR>` allocated in `ImplMonitor::all()`
+    // via `Box::into_raw`. `EnumDisplayMonitors` invokes this callback synchronously on the
+    // same thread before returning, so the pointer remains valid for the duration.
     unsafe {
         let state = &mut *(state.0 as *mut Vec<HMONITOR>);
         state.push(h_monitor);

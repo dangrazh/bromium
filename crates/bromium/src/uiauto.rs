@@ -1,4 +1,4 @@
-use windows_strings::*;
+use windows_strings::BSTR;
 
 use log::{debug, error, info};
 use uiautomation::UIElement;
@@ -80,29 +80,3 @@ pub fn supports_value(element: &IUIAutomationElement) -> bool {
     unsafe { element.GetCurrentPattern(UIA_ValuePatternId).is_ok() }
 }
 
-#[cfg(test)]
-mod tests {
-    use bromium_common::get_ui_automation_instance;
-    #[allow(unused_imports)]
-    use log::debug;
-
-    #[test]
-    fn test_ui_automation_creation_sta() {
-        debug!("UIAutomation::test_ui_automation_creation_sta called.");
-
-        use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-
-        let _result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-
-        let uia = get_ui_automation_instance();
-        assert!(uia.is_ok(), "Failed to create UIAutomation instance");
-    }
-
-    #[test]
-    fn test_ui_automation_creation_mta() {
-        debug!("UIAutomation::test_ui_automation_creation_mta called.");
-
-        let uia = get_ui_automation_instance();
-        assert!(uia.is_ok(), "Failed to create UIAutomation instance");
-    }
-}

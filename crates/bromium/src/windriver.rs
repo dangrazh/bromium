@@ -64,12 +64,16 @@ impl Bromium {
         self.__repr__()
     }
     #[staticmethod]
-    pub fn get_win_driver(timeout_ms: u64, window_title: Option<String>) -> PyResult<WinDriver> {
+    pub fn get_win_driver(
+        py: Python<'_>,
+        timeout_ms: u64,
+        window_title: Option<String>,
+    ) -> PyResult<WinDriver> {
         debug!(
             "Bromium::get_win_driver called with timeout: {}ms",
             timeout_ms
         );
-        let driver = WinDriver::new(timeout_ms, window_title)?;
+        let driver = WinDriver::new(py, timeout_ms, window_title)?;
         Ok(driver)
     }
 
@@ -179,6 +183,17 @@ impl Element {
 
     pub fn __str__(&self) -> PyResult<String> {
         Ok(self.name.clone())
+    }
+
+    pub fn __eq__(&self, other: &Element) -> bool {
+        self.runtime_id == other.runtime_id
+    }
+
+    pub fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.runtime_id.hash(&mut hasher);
+        hasher.finish()
     }
 
     // ─── Properties (Pythonic attribute access) ───────────────────────────────
@@ -540,7 +555,7 @@ impl WinDriver {
 #[pymethods]
 impl WinDriver {
     #[new]
-    pub fn new(timeout_ms: u64, window_title: Option<String>) -> PyResult<Self> {
+    pub fn new(py: Python<'_>, timeout_ms: u64, window_title: Option<String>) -> PyResult<Self> {
         if let Some(title) = window_title.as_deref() {
             debug!(
                 "Creating new WinDriver with timeout: {}ms and window title filter: '{}'",
@@ -550,22 +565,20 @@ impl WinDriver {
             debug!("Creating new WinDriver with timeout: {}ms", timeout_ms);
         }
 
-        // get the ui tree in a separate thread
         let cancel_flag = Arc::new(AtomicBool::new(false));
-        let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
         let window_title_clone = window_title.clone();
-        let cancel_clone = Some(Arc::clone(&cancel_flag));
-        thread::spawn(move || {
-            debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, Some(2), None, window_title_clone, cancel_clone);
-        });
-        info!("Spawned separate thread to get ui tree");
 
-        let ui_tree: UITreeXML = rx
-            .recv_timeout(Duration::from_secs(DEFAULT_TREE_TIMEOUT_SECS))
+        let tree_result = py.allow_threads(move || {
+            Self::spawn_tree_construction(
+                cancel_flag,
+                window_title_clone,
+                Some(2),
+                Duration::from_secs(DEFAULT_TREE_TIMEOUT_SECS),
+            )
+        });
+
+        let ui_tree: UITreeXML = tree_result
             .map_err(|e| {
-                // Signal the orphaned thread to stop
-                cancel_flag.store(true, Ordering::Relaxed);
                 error!("UI tree creation timed out or channel error: {}", e);
                 TreeConstructionError::new_err(format!(
                     "UI tree creation timed out or channel error: {}",
@@ -733,14 +746,16 @@ impl WinDriver {
         let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
         // SAFETY: `point` is a valid stack-allocated POINT; GetCursorPos writes into it.
         unsafe {
-            let _res = GetCursorPos(&mut point);
-            Ok((point.x, point.y))
+            GetCursorPos(&mut point).map_err(|e| {
+                AutomationError::new_err(format!("GetCursorPos failed: {}", e))
+            })?;
         }
+        Ok((point.x, point.y))
     }
 
-    pub fn refresh(&mut self, window_title: Option<String>) -> PyResult<()> {
+    pub fn refresh(&mut self, py: Python<'_>, window_title: Option<String>) -> PyResult<()> {
         debug!("WinDriver::refresh called.");
-        self.refresh_ui_tree(window_title)
+        self.refresh_ui_tree(py, window_title)
     }
 
     pub fn get_element_by_coordinates(&self, x: i32, y: i32) -> PyResult<Element> {
@@ -911,13 +926,14 @@ impl WinDriver {
 
         debug!("Searching for elements with xpath: {}", xpath);
         trace!("UI Tree has {} elements", self.ui_tree.get_elements().len());
-        let Some(elements) = self.ui_tree.get_elements_by_xpath(xpath.as_str()) else {
+        let elements = self
+            .ui_tree
+            .get_elements_by_xpath(xpath.as_str())
+            .unwrap_or_default();
+
+        if elements.is_empty() {
             debug!("No elements found for xpath: {}", xpath);
-            return Err(ElementNotFoundError::new_err(format!(
-                "No elements found for xpath '{}'",
-                xpath
-            )));
-        };
+        }
 
         let results: Vec<Element> = elements
             .iter()
@@ -957,44 +973,33 @@ impl WinDriver {
     pub fn take_screenshot(&self) -> PyResult<String> {
         debug!("WinDriver::take_screenshot called.");
 
-        let monitors: Vec<Monitor>;
-        if let Ok(mons) = Monitor::all() {
-            if mons.is_empty() {
-                error!("No monitors found for screenshot");
-                return Err(AutomationError::new_err("No monitors found"));
-            } else {
-                debug!("Found {} monitors", mons.len());
-                monitors = mons;
-            }
-        } else {
-            error!("Failed to get monitors for screenshot");
-            return Err(AutomationError::new_err("Failed to enumerate monitors"));
+        let monitors = Monitor::all().map_err(|e| {
+            error!("Failed to get monitors for screenshot: {}", e);
+            AutomationError::new_err("Failed to enumerate monitors")
+        })?;
+        if monitors.is_empty() {
+            error!("No monitors found for screenshot");
+            return Err(AutomationError::new_err("No monitors found"));
         }
+        debug!("Found {} monitors", monitors.len());
 
-        let mut out_dir = std::env::temp_dir();
-        out_dir = out_dir.join("bromium_screenshots");
-        match fs::create_dir_all(&out_dir) {
-            Ok(_) => {
-                info!("Created screenshot directory at {:?}", out_dir);
-            }
-            Err(e) => {
-                error!("Error creating screenshot directory: {:?}", e);
-                return Err(AutomationError::new_err(format!(
-                    "Failed to create screenshot directory '{}': {}",
-                    out_dir.display(),
-                    e
-                )));
-            }
-        }
+        let out_dir = std::env::temp_dir().join("bromium_screenshots");
+        fs::create_dir_all(&out_dir).map_err(|e| {
+            error!("Error creating screenshot directory: {:?}", e);
+            AutomationError::new_err(format!(
+                "Failed to create screenshot directory '{}': {}",
+                out_dir.display(),
+                e
+            ))
+        })?;
+        info!("Created screenshot directory at {:?}", out_dir);
 
-        let primary_monitor: Option<Monitor> = monitors
+        let Some(monitor) = monitors
             .into_iter()
-            .find(|m| m.is_primary().unwrap_or(false));
-        if primary_monitor.is_none() {
+            .find(|m| m.is_primary().unwrap_or(false))
+        else {
             return Err(AutomationError::new_err("No primary monitor found"));
-        }
-
-        let monitor = primary_monitor.unwrap();
+        };
         let image = monitor.capture_image().map_err(|e| {
             AutomationError::new_err(format!("Failed to capture screenshot: {}", e))
         })?;
@@ -1057,32 +1062,26 @@ impl WinDriver {
         }
     }
 
-    pub fn refresh_ui_tree(&mut self, window_title: Option<String>) -> PyResult<()> {
-        debug!("WinDriver::refresh called.");
+    pub fn refresh_ui_tree(
+        &mut self,
+        py: Python<'_>,
+        window_title: Option<String>,
+    ) -> PyResult<()> {
+        debug!("WinDriver::refresh_ui_tree called (GIL-releasing).");
 
-        // Cancel any previously orphaned tree-construction thread
         self.cancel_flag.store(true, Ordering::Relaxed);
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.cancel_flag = Arc::clone(&cancel_flag);
 
-        // handle optional window title parameter
-        // if a window title is provided, use it to filter the UI tree and
-        // ignore the potentially stored window title in the WinDriver instance
         let window_title_filter = window_title.or_else(|| self.window_title.clone());
-        // get the ui tree in a separate thread
-        let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-        let cancel_clone = Some(Arc::clone(&cancel_flag));
-        thread::spawn(move || {
-            debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, None, None, window_title_filter, cancel_clone);
-        });
-        info!("Spawned separate thread to refresh ui tree");
+        let tree_timeout = Duration::from_secs(self.tree_timeout_secs);
 
-        let ui_tree = rx
-            .recv_timeout(Duration::from_secs(self.tree_timeout_secs))
+        let tree_result = py.allow_threads(move || {
+            Self::spawn_tree_construction(cancel_flag, window_title_filter, None, tree_timeout)
+        });
+
+        self.ui_tree = tree_result
             .map_err(|e| {
-                // Signal the orphaned thread to stop
-                cancel_flag.store(true, Ordering::Relaxed);
                 TreeConstructionError::new_err(format!(
                     "UI tree refresh failed (timeout or channel error): {}",
                     e
@@ -1091,8 +1090,6 @@ impl WinDriver {
             .map_err(|e| {
                 TreeConstructionError::new_err(format!("UI tree refresh failed: {}", e))
             })?;
-
-        self.ui_tree = ui_tree;
 
         info!("UITree successfully refreshed");
         debug!(
@@ -1105,28 +1102,49 @@ impl WinDriver {
 
 // ─── Internal (non-Python) methods ───────────────────────────────────────────
 impl WinDriver {
-    /// Refresh the UI tree with a shallow (depth=2) walk.
-    /// Used internally by `launch_or_activate_app` for fast re-scans.
-    pub fn refresh_ui_tree_top_2(&mut self) -> PyResult<()> {
-        debug!("WinDriver::refresh_ui_tree_top_2 called.");
+    /// Spawn tree construction on a background thread and wait for the result.
+    /// This is the shared core used by both GIL-releasing pymethods and
+    /// internal (non-Python) callers.
+    fn spawn_tree_construction(
+        cancel_flag: Arc<AtomicBool>,
+        window_title: Option<String>,
+        max_depth: Option<usize>,
+        timeout: Duration,
+    ) -> Result<Result<UITreeXML, UITreeError>, std::sync::mpsc::RecvTimeoutError> {
+        let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
+        let cancel_clone = Some(Arc::clone(&cancel_flag));
+        thread::spawn(move || {
+            debug!("Spawning thread to get UI tree");
+            get_all_elements_xml(tx, None, max_depth, None, window_title, cancel_clone);
+        });
 
-        // Cancel any previously orphaned tree-construction thread
+        let result = rx.recv_timeout(timeout);
+        if result.is_err() {
+            cancel_flag.store(true, Ordering::Relaxed);
+        }
+        result
+    }
+
+    /// Refresh the UI tree without requiring a Python GIL token.
+    /// Used by internal callers (e.g. `launch_or_activate_application`).
+    pub fn refresh_ui_tree_internal(
+        &mut self,
+        window_title: Option<String>,
+    ) -> PyResult<()> {
+        debug!("WinDriver::refresh_ui_tree_internal called.");
+
         self.cancel_flag.store(true, Ordering::Relaxed);
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.cancel_flag = Arc::clone(&cancel_flag);
 
-        let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-        let cancel_clone = Some(Arc::clone(&cancel_flag));
-        thread::spawn(move || {
-            debug!("Spawning thread to get UI tree (depth=2)");
-            get_all_elements_xml(tx, None, Some(2_usize), None, None, cancel_clone);
-        });
+        let window_title_filter = window_title.or_else(|| self.window_title.clone());
+        let tree_timeout = Duration::from_secs(self.tree_timeout_secs);
 
-        let ui_tree = rx
-            .recv_timeout(Duration::from_secs(self.tree_timeout_secs))
+        let tree_result =
+            Self::spawn_tree_construction(cancel_flag, window_title_filter, None, tree_timeout);
+
+        self.ui_tree = tree_result
             .map_err(|e| {
-                // Signal the orphaned thread to stop
-                cancel_flag.store(true, Ordering::Relaxed);
                 TreeConstructionError::new_err(format!(
                     "UI tree refresh failed (timeout or channel error): {}",
                     e
@@ -1136,7 +1154,38 @@ impl WinDriver {
                 TreeConstructionError::new_err(format!("UI tree refresh failed: {}", e))
             })?;
 
-        self.ui_tree = ui_tree;
+        info!("UITree successfully refreshed");
+        debug!(
+            "UI Tree has now {} elements",
+            self.ui_tree.get_elements().len()
+        );
+        Ok(())
+    }
+
+    /// Refresh the UI tree with a shallow (depth=2) walk.
+    /// Used internally by `launch_or_activate_app` for fast re-scans.
+    pub fn refresh_ui_tree_top_2(&mut self) -> PyResult<()> {
+        debug!("WinDriver::refresh_ui_tree_top_2 called.");
+
+        self.cancel_flag.store(true, Ordering::Relaxed);
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.cancel_flag = Arc::clone(&cancel_flag);
+
+        let tree_timeout = Duration::from_secs(self.tree_timeout_secs);
+
+        let tree_result =
+            Self::spawn_tree_construction(cancel_flag, None, Some(2_usize), tree_timeout);
+
+        self.ui_tree = tree_result
+            .map_err(|e| {
+                TreeConstructionError::new_err(format!(
+                    "UI tree refresh failed (timeout or channel error): {}",
+                    e
+                ))
+            })?
+            .map_err(|e| {
+                TreeConstructionError::new_err(format!("UI tree refresh failed: {}", e))
+            })?;
 
         info!("UITree successfully refreshed (shallow)");
         Ok(())

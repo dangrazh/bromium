@@ -732,7 +732,6 @@ dependencies = [
 name = "bromium-common"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "log",
  "uiautomation",
  "windows 0.61.3",
@@ -5174,6 +5173,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "env_logger",
+ "log",
  "time",
  "uiautomation",
  "uitree",
@@ -6326,6 +6326,7 @@ version = "0.1.0"
 dependencies = [
  "bromium-common",
  "chrono",
+ "log",
  "win_event_hook",
  "windows 0.61.3",
 ]
