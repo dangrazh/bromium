@@ -25,6 +25,9 @@ use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use uiautomation::UIElement;
+use uiautomation::types::ControlType;
+
+use bromium_common::get_ui_automation_instance;
 
 use log::{debug, error, info, trace, warn};
 
@@ -829,8 +832,17 @@ impl WinDriver {
                 debug!("Element not found, retrying for {} ms.", effective_timeout);
                 let start_time = std::time::Instant::now();
                 let tree_timeout = Duration::from_secs(self.tree_timeout_secs);
+
+                let scoped_root = Self::find_scoped_root_element(&xpath);
+                if scoped_root.is_some() {
+                    debug!("Using scoped root element for narrowed tree traversal");
+                } else {
+                    debug!("No scoped root element found, using full tree traversal");
+                }
+
                 while start_time.elapsed().as_millis() < effective_timeout as u128 {
                     let window_title_filter = self.window_title.clone();
+                    let scoped_root_clone = scoped_root.clone();
                     // Cancel any previously orphaned tree-construction thread
                     self.cancel_flag.store(true, Ordering::Relaxed);
                     let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -842,7 +854,7 @@ impl WinDriver {
                         thread::spawn(move || {
                             get_all_elements_xml(
                                 tx,
-                                None,
+                                scoped_root_clone,
                                 None,
                                 None,
                                 window_title_filter,
@@ -1111,11 +1123,21 @@ impl WinDriver {
         max_depth: Option<usize>,
         timeout: Duration,
     ) -> Result<Result<UITreeXML, UITreeError>, std::sync::mpsc::RecvTimeoutError> {
+        Self::spawn_tree_construction_scoped(cancel_flag, window_title, max_depth, timeout, None)
+    }
+
+    fn spawn_tree_construction_scoped(
+        cancel_flag: Arc<AtomicBool>,
+        window_title: Option<String>,
+        max_depth: Option<usize>,
+        timeout: Duration,
+        root_element: Option<SaveUIElementXML>,
+    ) -> Result<Result<UITreeXML, UITreeError>, std::sync::mpsc::RecvTimeoutError> {
         let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
         let cancel_clone = Some(Arc::clone(&cancel_flag));
         thread::spawn(move || {
             debug!("Spawning thread to get UI tree");
-            get_all_elements_xml(tx, None, max_depth, None, window_title, cancel_clone);
+            get_all_elements_xml(tx, root_element, max_depth, None, window_title, cancel_clone);
         });
 
         let result = rx.recv_timeout(timeout);
@@ -1189,6 +1211,57 @@ impl WinDriver {
 
         info!("UITree successfully refreshed (shallow)");
         Ok(())
+    }
+
+    /// Extract the window/pane name from an XPath expression.
+    /// Looks for patterns like `Window[@Name='...']` or `Pane[@Name='...']`
+    /// and returns `(control_type_tag, name)`.
+    fn extract_root_element_hint(xpath: &str) -> Option<(&str, String)> {
+        for tag in &["Window", "Pane"] {
+            let pattern = format!("{}[@Name='", tag);
+            if let Some(start) = xpath.find(&pattern) {
+                let after = &xpath[start + pattern.len()..];
+                if let Some(end) = after.find("']") {
+                    return Some((tag, after[..end].to_string()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Find a top-level window or pane element by name, scoping subsequent
+    /// tree walks to just that element's subtree.
+    fn find_scoped_root_element(xpath: &str) -> Option<SaveUIElementXML> {
+        let (tag, name) = Self::extract_root_element_hint(xpath)?;
+
+        debug!(
+            "XPath hints at root {}[@Name='{}'], attempting scoped lookup",
+            tag, name
+        );
+
+        let uia = get_ui_automation_instance().ok()?;
+        let control_type = match tag {
+            "Window" => ControlType::Window,
+            "Pane" => ControlType::Pane,
+            _ => return None,
+        };
+
+        let element = uia
+            .create_matcher()
+            .name(&name)
+            .control_type(control_type)
+            .depth(1)
+            .timeout(0)
+            .find_first()
+            .ok()?;
+
+        info!(
+            "Scoped root element found: '{}' ({})",
+            element.get_name().unwrap_or_default(),
+            tag
+        );
+
+        Some(SaveUIElementXML::new(&element, 0, 999))
     }
 }
 
@@ -1314,5 +1387,41 @@ mod tests {
     #[test]
     fn test_normalized_preserves_regular_chars() {
         assert_eq!(normalized("hello_world.txt".to_string()), "hello_world.txt");
+    }
+
+    #[test]
+    fn test_extract_root_element_hint_window() {
+        let result = WinDriver::extract_root_element_hint("//Window[@Name='Calculator']//Button[@Name='1']");
+        assert_eq!(result, Some(("Window", "Calculator".to_string())));
+    }
+
+    #[test]
+    fn test_extract_root_element_hint_pane() {
+        let result = WinDriver::extract_root_element_hint("//Pane[@Name='Desktop']//Button[@Name='Start']");
+        assert_eq!(result, Some(("Pane", "Desktop".to_string())));
+    }
+
+    #[test]
+    fn test_extract_root_element_hint_window_priority_over_pane() {
+        let result = WinDriver::extract_root_element_hint("//Window[@Name='App']/Pane[@Name='Content']");
+        assert_eq!(result, Some(("Window", "App".to_string())));
+    }
+
+    #[test]
+    fn test_extract_root_element_hint_no_match() {
+        let result = WinDriver::extract_root_element_hint("//Button[@Name='OK']");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_root_element_hint_name_with_spaces() {
+        let result = WinDriver::extract_root_element_hint("//Window[@Name='Notepad - Untitled']//Edit");
+        assert_eq!(result, Some(("Window", "Notepad - Untitled".to_string())));
+    }
+
+    #[test]
+    fn test_extract_root_element_hint_absolute_path() {
+        let result = WinDriver::extract_root_element_hint("/Window[@Name='MyApp']/Panel/Button");
+        assert_eq!(result, Some(("Window", "MyApp".to_string())));
     }
 }

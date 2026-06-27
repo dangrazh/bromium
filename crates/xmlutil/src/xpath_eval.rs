@@ -13,6 +13,69 @@ enum XpathEvalError {
     NamespaceDecl(String),
 }
 
+/// Pre-parsed XML document that can be reused across multiple XPath evaluations,
+/// avoiding the cost of re-parsing the XML string each time.
+pub struct XpathDocCache {
+    documents: xee_xpath::Documents,
+    doc_handle: xee_xpath::DocumentHandle,
+}
+
+// SAFETY: XpathDocCache is only ever accessed from the single thread that owns the
+// UITree. The inner Rc<RefCell<…>> inside xee_xpath::Documents is never shared
+// across threads — it is created on the owning thread and all access stays there.
+unsafe impl Send for XpathDocCache {}
+
+impl std::fmt::Debug for XpathDocCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("XpathDocCache")
+            .field("cached", &true)
+            .finish()
+    }
+}
+
+impl XpathDocCache {
+    pub fn new(xml: &str) -> Option<Self> {
+        let mut documents = xee_xpath::Documents::new();
+        let doc_handle = documents.add_string_without_uri(xml).ok()?;
+        Some(XpathDocCache {
+            documents,
+            doc_handle,
+        })
+    }
+}
+
+/// Evaluate an XPath expression against a pre-parsed XML document cache.
+/// This skips the XML parsing step, reusing the already-parsed DOM.
+pub fn eval_xpath_on_cache(expr: &str, cache: &mut XpathDocCache) -> XpathResult {
+    let static_context_builder = match make_static_context_builder(None, &[]) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            return XpathResult::new(
+                false,
+                Some(format!("Failed to build XPath context: {}", e)),
+                0,
+                vec![],
+            );
+        }
+    };
+
+    let queries = xee_xpath::Queries::new(static_context_builder);
+    match execute_query(
+        expr,
+        &queries,
+        &mut cache.documents,
+        Some(cache.doc_handle),
+    ) {
+        Ok(res) => res,
+        Err(e) => XpathResult::new(
+            false,
+            Some(format!("XPath query execution failed: {}", e)),
+            0,
+            vec![],
+        ),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct XpathQueryResult {
     item_xml: String,

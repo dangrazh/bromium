@@ -7,7 +7,7 @@ use bromium_common::{format_runtime_id, get_ui_automation_instance};
 
 use crate::UITreeMap;
 use xmlutil::XpathQueryResult;
-use xmlutil::xpath_eval::eval_xpath;
+use xmlutil::xpath_eval::{XpathDocCache, eval_xpath, eval_xpath_on_cache};
 use xmlutil::xpath_gen::get_xpath_full_from_runtime_id;
 
 use quick_xml::Writer;
@@ -15,6 +15,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use std::collections::HashSet;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 
@@ -22,12 +23,25 @@ use uiautomation::{UIElement, UITreeWalker};
 
 use log::{debug, error, info, trace, warn};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct UITree {
     tree: UITreeMap<()>,
     xml_dom_tree: String,
     ui_elements: Vec<UIElementInTree>,
     node_to_elem: Vec<usize>,
+    xpath_cache: Mutex<Option<XpathDocCache>>,
+}
+
+impl Clone for UITree {
+    fn clone(&self) -> Self {
+        UITree {
+            tree: self.tree.clone(),
+            xml_dom_tree: self.xml_dom_tree.clone(),
+            ui_elements: self.ui_elements.clone(),
+            node_to_elem: self.node_to_elem.clone(),
+            xpath_cache: Mutex::new(None),
+        }
+    }
 }
 
 impl UITree {
@@ -37,6 +51,7 @@ impl UITree {
             xml_dom_tree: String::new(),
             ui_elements: Vec::new(),
             node_to_elem: Vec::new(),
+            xpath_cache: Mutex::new(None),
         }
     }
 
@@ -51,6 +66,7 @@ impl UITree {
             xml_dom_tree,
             ui_elements,
             node_to_elem,
+            xpath_cache: Mutex::new(None),
         }
     }
 
@@ -196,10 +212,21 @@ impl UITree {
         format!("{base}/@RtID")
     }
 
+    fn eval_xpath_cached(&self, xpath: &str) -> xmlutil::XpathResult {
+        let mut cache_guard = self.xpath_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache_guard.is_none() {
+            *cache_guard = XpathDocCache::new(self.get_xml_dom_tree());
+        }
+        match cache_guard.as_mut() {
+            Some(cache) => eval_xpath_on_cache(xpath, cache),
+            None => eval_xpath(xpath, self.get_xml_dom_tree()),
+        }
+    }
+
     pub fn get_element_by_xpath(&self, xpath: &str) -> Option<&SaveUIElement> {
         let xpath = Self::normalize_xpath_for_rtid(xpath);
 
-        let xpath_result = eval_xpath(&xpath, self.get_xml_dom_tree());
+        let xpath_result = self.eval_xpath_cached(&xpath);
 
         match xpath_result.get_result_count() {
             0 => None,
@@ -231,7 +258,7 @@ impl UITree {
     pub fn get_elements_by_xpath(&self, xpath: &str) -> Option<Vec<&SaveUIElement>> {
         let xpath = Self::normalize_xpath_for_rtid(xpath);
 
-        let xpath_result = eval_xpath(&xpath, self.get_xml_dom_tree());
+        let xpath_result = self.eval_xpath_cached(&xpath);
         let mut results: Vec<&SaveUIElement> = Vec::new();
         match xpath_result.get_result_count() {
             0 => None,
@@ -331,6 +358,7 @@ impl UITree {
             &subtree_runtime_id,
         )?;
         self.xml_dom_tree = new_xml_dom_tree;
+        *self.xpath_cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
         self.rebuild_node_to_elem();
 
@@ -1002,5 +1030,39 @@ mod tests {
         let tree = build_test_tree();
         let found = tree.get_elements_by_xpath("//Slider");
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_xpath_cache_reused_across_calls() {
+        let tree = build_test_tree();
+
+        // Cache is empty initially
+        assert!(tree.xpath_cache.lock().unwrap().is_none());
+
+        // First call populates cache
+        let _ = tree.get_element_by_xpath("//Button[@Name='OK']");
+        assert!(tree.xpath_cache.lock().unwrap().is_some());
+
+        // Second call reuses cache (would panic if cache were somehow corrupted)
+        let found = tree.get_element_by_xpath("//Edit[@Name='Username']");
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn test_xpath_cache_cleared_on_clone() {
+        let tree = build_test_tree();
+
+        // Populate cache
+        let _ = tree.get_element_by_xpath("//Button");
+        assert!(tree.xpath_cache.lock().unwrap().is_some());
+
+        // Clone should have empty cache
+        let cloned = tree.clone();
+        assert!(cloned.xpath_cache.lock().unwrap().is_none());
+
+        // Cloned tree should still work correctly
+        let found = cloned.get_elements_by_xpath("//Button");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().len(), 2);
     }
 }
