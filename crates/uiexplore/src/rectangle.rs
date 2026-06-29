@@ -1,4 +1,4 @@
-pub use bromium_common::rectangle::{clear_frame, draw_frame, is_inside_rectangle};
+pub use bromium_common::rectangle::is_inside_rectangle;
 
 use windows::Win32::Foundation::POINT;
 

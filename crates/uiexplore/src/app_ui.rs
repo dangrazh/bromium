@@ -14,15 +14,13 @@ use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetCursorPos, WindowFromPoint};
 
 #[allow(unused)]
-use crate::{AppContext, rectangle}; //winevent
+use crate::{AppContext, border_window::BorderWindow, rectangle}; //winevent
 use uitree::{SaveUIElementXML, UIElementInTreeXML, UITreeError, UITreeXML, get_all_elements_xml}; //SaveUIElement,
 use winevent_monitor::WinEventMonitor;
 
 #[derive(Clone, Debug)]
 struct TreeState {
     active_element: Option<SaveUIElementXML>,
-    prev_element: Option<SaveUIElementXML>,
-    clear_frame: bool,
     active_ui_element: Option<usize>,
     path_to_active_ui_element: Option<Vec<usize>>,
     refresh_path_to_active_ui_element: bool,
@@ -32,8 +30,6 @@ impl TreeState {
     fn new() -> Self {
         Self {
             active_element: None,
-            prev_element: None,
-            clear_frame: false,
             active_ui_element: None,
             path_to_active_ui_element: None,
             refresh_path_to_active_ui_element: false,
@@ -41,22 +37,13 @@ impl TreeState {
     }
 
     fn update_state(&mut self, new_active_element: SaveUIElementXML, new_active_ui_element: usize) {
-        // if we have an active element, check if the new one is different and if yes,
-        // update the state to reflect the change
-        if let Some(current_element) = &self.active_element {
-            // only update the state if there is a change in the active element
-            if new_active_element.get_runtime_id() != current_element.get_runtime_id() {
-                self.prev_element = Some(current_element.clone());
-                self.clear_frame = true;
-                self.active_element = Some(new_active_element);
-                self.active_ui_element = Some(new_active_ui_element);
-                self.refresh_path_to_active_ui_element = true;
-            }
-        } else {
-            // there was no active element, so set the active element,
-            // and the active ui element to the proviced values and
-            // default the prev element to the provided active
-            self.prev_element = Some(new_active_element.clone());
+        // Only update the state if there is a change in the active element
+        let is_new = self
+            .active_element
+            .as_ref()
+            .is_none_or(|current| new_active_element.get_runtime_id() != current.get_runtime_id());
+
+        if is_new {
             self.active_element = Some(new_active_element);
             self.active_ui_element = Some(new_active_ui_element);
             self.refresh_path_to_active_ui_element = true;
@@ -220,6 +207,7 @@ pub struct UIExplorer {
     app_mode: AppMode,
     display_mode: DisplayMode,
     winevent_monitor: WinEventMonitor,
+    border_window: Option<BorderWindow>,
 }
 
 impl UIExplorer {
@@ -259,6 +247,10 @@ impl UIExplorer {
 
         let app_context = AppContext::new_from_screen(0.4, 0.8);
 
+        let border_window = BorderWindow::new()
+            .map_err(|e| eprintln!("Failed to create border overlay: {e}"))
+            .ok();
+
         Self {
             app_name: caption,
             app_context,
@@ -279,11 +271,16 @@ impl UIExplorer {
             }),
             display_mode: DisplayMode::Explore,
             winevent_monitor: WinEventMonitor::new(),
+            border_window,
         }
     }
 
     // #[allow(dead_code)]
     pub fn new_with_state(caption: String, app_context: AppContext, ui_tree: UITreeXML) -> Self {
+        let border_window = BorderWindow::new()
+            .map_err(|e| eprintln!("Failed to create border overlay: {e}"))
+            .ok();
+
         Self {
             app_name: caption,
             app_context,
@@ -304,6 +301,7 @@ impl UIExplorer {
             }),
             display_mode: DisplayMode::Explore,
             winevent_monitor: WinEventMonitor::new(),
+            border_window,
         }
     }
 
@@ -563,20 +561,11 @@ impl UIExplorer {
                     },
                 }
 
-                // manage the highlighting lifecycle
-                let new_highlight = self.highlighting;
-
-                // clear any highlighted surrounding rectangle as
-                if new_highlight != prev_highlight && !new_highlight {
-                    log::debug!("Old highlight value was {}, new one is {}", prev_highlight, new_highlight);
-                    let rect: RECT = RECT {
-                        left: 0,
-                        top: 0,
-                        right: self.app_context.screen_width,
-                        bottom: self.app_context.screen_height,
-                    };
-                    rectangle::clear_frame(rect).unwrap();
-                    state.clear_frame = false;
+                // When highlighting is toggled off, hide the border overlay
+                if prev_highlight && !self.highlighting {
+                    if let Some(border) = &self.border_window {
+                        border.hide();
+                    }
                 }
 
 
@@ -638,45 +627,6 @@ impl UIExplorer {
                 }
 
                 if let Some(active_element) = &state.active_element {
-                    // // Optionally render the frame around the active element on the screen
-                    // if self.highlighting {
-                    //     let left: f32 = active_element.get_bounding_rectangle().get_left() as f32 * self.app_context.screen_scale;
-                    //     let top: f32 = active_element.get_bounding_rectangle().get_top() as f32 * self.app_context.screen_scale;
-                    //     let right: f32 = active_element.get_bounding_rectangle().get_right() as f32 * self.app_context.screen_scale;
-                    //     let bottom: f32 = active_element.get_bounding_rectangle().get_bottom() as f32 * self.app_context.screen_scale;
-
-                    //     let rect: RECT = RECT {
-                    //         left: left as i32,
-                    //         top: top as i32,
-                    //         right: right as i32,
-                    //         bottom: bottom as i32,
-                    //     };
-
-                    //     if let Some(prev_element) = &state.prev_element {
-                    //         let prev_left: f32 = prev_element.get_bounding_rectangle().get_left() as f32 * self.app_context.screen_scale;
-                    //         let prev_top: f32 = prev_element.get_bounding_rectangle().get_top() as f32 * self.app_context.screen_scale;
-                    //         let prev_right: f32 = prev_element.get_bounding_rectangle().get_right() as f32 * self.app_context.screen_scale;
-                    //         let prev_bottom: f32 = prev_element.get_bounding_rectangle().get_bottom() as f32 * self.app_context.screen_scale;
-
-                    //         let prev_rect: RECT = RECT {
-                    //             left: prev_left as i32,
-                    //             top: prev_top as i32,
-                    //             right: prev_right as i32,
-                    //             bottom: prev_bottom as i32,
-                    //         };
-                    //         if state.clear_frame { //rect != prev_rect &&
-                    //             log::debug!("Cleanup needed - new: {:?} vs old: {:?}", rect, prev_rect);
-                    //             rectangle::clear_frame(prev_rect).unwrap();
-                    //             rectangle::draw_frame(rect, 4).unwrap();
-                    //             state.clear_frame = false;
-                    //         } else {
-                    //             rectangle::draw_frame(rect, 4).unwrap();
-                    //         }
-                    //     } else {
-                    //         rectangle::draw_frame(rect, 4).unwrap();
-                    //     }
-                    // }
-
                     // display the element properties
                     egui::Grid::new("some_unique_id")
                         .min_col_width(100.0)
@@ -966,54 +916,25 @@ impl UIExplorer {
     }
 
     #[inline(always)]
-    fn process_highlighting(&mut self, state: &mut TreeState) {
-        // Optionally render the frame around the active element on the screen
-        if self.highlighting {
-            let active_element = state.active_element.as_ref().unwrap();
-
-            let left: f32 = active_element.get_bounding_rectangle().get_left() as f32
-                * self.app_context.screen_scale;
-            let top: f32 = active_element.get_bounding_rectangle().get_top() as f32
-                * self.app_context.screen_scale;
-            let right: f32 = active_element.get_bounding_rectangle().get_right() as f32
-                * self.app_context.screen_scale;
-            let bottom: f32 = active_element.get_bounding_rectangle().get_bottom() as f32
-                * self.app_context.screen_scale;
-
-            let rect: RECT = RECT {
-                left: left as i32,
-                top: top as i32,
-                right: right as i32,
-                bottom: bottom as i32,
-            };
-
-            if let Some(prev_element) = &state.prev_element {
-                let prev_left: f32 = prev_element.get_bounding_rectangle().get_left() as f32
-                    * self.app_context.screen_scale;
-                let prev_top: f32 = prev_element.get_bounding_rectangle().get_top() as f32
-                    * self.app_context.screen_scale;
-                let prev_right: f32 = prev_element.get_bounding_rectangle().get_right() as f32
-                    * self.app_context.screen_scale;
-                let prev_bottom: f32 = prev_element.get_bounding_rectangle().get_bottom() as f32
-                    * self.app_context.screen_scale;
-
-                let prev_rect: RECT = RECT {
-                    left: prev_left as i32,
-                    top: prev_top as i32,
-                    right: prev_right as i32,
-                    bottom: prev_bottom as i32,
-                };
-                if state.clear_frame {
-                    //rect != prev_rect &&
-                    log::debug!("Cleanup needed - new: {:?} vs old: {:?}", rect, prev_rect);
-                    rectangle::clear_frame(prev_rect).unwrap();
-                    rectangle::draw_frame(rect, 4).unwrap();
-                    state.clear_frame = false;
-                } else {
-                    rectangle::draw_frame(rect, 4).unwrap();
+    fn process_highlighting(&mut self, state: &TreeState) {
+        if let Some(border) = &self.border_window {
+            if self.highlighting {
+                if let Some(active_element) = &state.active_element {
+                    let scale = self.app_context.screen_scale;
+                    let rect = RECT {
+                        left: (active_element.get_bounding_rectangle().get_left() as f32 * scale)
+                            as i32,
+                        top: (active_element.get_bounding_rectangle().get_top() as f32 * scale)
+                            as i32,
+                        right: (active_element.get_bounding_rectangle().get_right() as f32 * scale)
+                            as i32,
+                        bottom: (active_element.get_bounding_rectangle().get_bottom() as f32
+                            * scale) as i32,
+                    };
+                    border.update(rect);
                 }
             } else {
-                rectangle::draw_frame(rect, 4).unwrap();
+                border.hide();
             }
         }
     }

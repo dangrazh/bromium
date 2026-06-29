@@ -9,6 +9,7 @@ use windows::Win32::UI::HiDpi::{
 }; //DPI_AWARENESS, DPI_AWARENESS_CONTEXT, GetThreadDpiAwarenessContext
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
+mod border_window;
 mod commons;
 mod rectangle;
 
