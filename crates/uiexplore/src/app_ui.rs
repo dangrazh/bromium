@@ -10,8 +10,8 @@ use eframe::egui;
 use egui::Response; // TextBuffer
 // use egui_code_editor::{CodeEditor, ColorTheme, Syntax};
 
-use windows::Win32::Foundation::{POINT, RECT};
-use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetCursorPos, WindowFromPoint};
 
 #[allow(unused)]
 use crate::{AppContext, rectangle}; //winevent
@@ -915,23 +915,29 @@ impl UIExplorer {
     fn process_event(&mut self, event: &egui::Event, state: &mut TreeState) {
         match event {
             egui::Event::MouseMoved { .. } => {
-                // log::debug!("Mouse moved event received");
-                // log::debug!("Getting cursor position");
-
+                // Get cursor position in raw screen coordinates and scaled coordinates
+                let mut raw_cursor_pos = POINT::default();
                 let cursor_position = unsafe {
-                    let mut cursor_pos = POINT::default();
-                    GetCursorPos(&mut cursor_pos).unwrap();
-                    cursor_pos.x = (cursor_pos.x as f32 / self.app_context.screen_scale) as i32;
-                    cursor_pos.y = (cursor_pos.y as f32 / self.app_context.screen_scale) as i32;
-                    cursor_pos
+                    GetCursorPos(&mut raw_cursor_pos).unwrap();
+                    POINT {
+                        x: (raw_cursor_pos.x as f32 / self.app_context.screen_scale) as i32,
+                        y: (raw_cursor_pos.y as f32 / self.app_context.screen_scale) as i32,
+                    }
                 };
-                // log::debug!("getting bouding rectangle for cursor position: ({}, {})", cursor_position.x, cursor_position.y);
-                // log::debug!("Searching {} elements in the UI tree", self.ui_tree.get_elements().len());
+
+                // Use WindowFromPoint to determine which top-level window is
+                // visually on top at the cursor position, then restrict the
+                // element search to that window's z-order group.
+                let target_z = Self::resolve_z_order_at_point(
+                    &raw_cursor_pos,
+                    self.ui_tree.get_elements(),
+                );
+
                 if let Some(ui_element_props) = rectangle::get_point_bounding_rect(
                     &cursor_position,
                     self.ui_tree.get_elements(),
+                    target_z,
                 ) {
-                    // log::debug!("Updating state with element found at cursor position: {}", ui_element_props.get_element_props().get_name());
                     state.update_state(
                         ui_element_props.get_element_props().clone(),
                         ui_element_props.get_tree_index(),
@@ -1010,6 +1016,34 @@ impl UIExplorer {
                 rectangle::draw_frame(rect, 4).unwrap();
             }
         }
+    }
+
+    /// Determine the z-order of the top-level window that is visually on top
+    /// at the given *raw* (unscaled) screen point.
+    ///
+    /// Uses `WindowFromPoint` to find the actual topmost HWND, walks up to
+    /// the root ancestor, then scans the level-1 elements in the UI tree for
+    /// a matching window handle.  Returns `Some(z_order)` when found, or
+    /// `None` when the window isn't part of the captured UI tree (in which
+    /// case the caller should fall back to an unfiltered search).
+    fn resolve_z_order_at_point(
+        raw_point: &POINT,
+        elements: &[uitree::UIElementInTreeXML],
+    ) -> Option<usize> {
+        let top_handle: isize = unsafe {
+            let hwnd: HWND = WindowFromPoint(*raw_point);
+            if hwnd.is_invalid() {
+                return None;
+            }
+            GetAncestor(hwnd, GA_ROOT).0 as isize
+        };
+        elements
+            .iter()
+            .find(|e| {
+                let p = e.get_element_props();
+                p.get_level() == 1 && p.get_handle() == top_handle
+            })
+            .map(|e| e.get_element_props().get_z_order())
     }
 
     fn set_status(&mut self, msg: String, duration: Duration) {
@@ -1151,7 +1185,7 @@ fn event_summary(event: &egui::Event, ui_elements: &[UIElementInTreeXML]) -> Str
             };
 
             if let Some(ui_element_props) =
-                rectangle::get_point_bounding_rect(&cursor_position, ui_elements)
+                rectangle::get_point_bounding_rect(&cursor_position, ui_elements, None)
             {
                 // format!("MouseMoved {{ x: {}, y: {} }} over {}", cursor_position.x, cursor_position.y, ui_element_props.name)
                 let ui_element_props = ui_element_props.get_element_props();
