@@ -11,60 +11,19 @@ use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_
 
 mod border_window;
 mod commons;
-mod rectangle;
 
 mod app_ui;
 use app_ui::UIExplorer;
 
-use ::uiexplore::signal_file;
-use uitree::{UITreeError, UITreeXML, get_all_elements_xml};
-
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread;
-use std::time::Duration;
+use uitree::UITreeXML;
 
 use eframe::{NativeOptions, Renderer, egui};
 
 fn main() -> eframe::Result {
     let app_name = "UI Explore";
 
-    println!("Getting the ui tree");
-    let cancel_flag = Arc::new(AtomicBool::new(false));
-    let cancel_clone = Some(Arc::clone(&cancel_flag));
-    let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-    thread::spawn(move || {
-        get_all_elements_xml(tx, None, None, Some(app_name.to_string()), None, cancel_clone);
-    });
-    println!("Spawned separate thread to get ui tree");
-
-    println!("displaying start screen now");
-    let start_screen_pid = launch_start_screen();
-
-    const TREE_TIMEOUT_SECS: u64 = 120;
-    let ui_tree = match rx.recv_timeout(Duration::from_secs(TREE_TIMEOUT_SECS)) {
-        Ok(Ok(tree)) => tree,
-        Ok(Err(e)) => {
-            cancel_flag.store(true, Ordering::Relaxed);
-            eprintln!("UI tree construction failed: {}", e);
-            UITreeXML::empty()
-        }
-        Err(e) => {
-            cancel_flag.store(true, Ordering::Relaxed);
-            eprintln!("UI tree construction timed out or channel error: {}", e);
-            UITreeXML::empty()
-        }
-    };
-
-    // Signal the start_screen child (if launched) to close
-    if let Some(pid) = start_screen_pid {
-        let _ = signal_file::create_signal_file_for_pid(pid);
-    }
-    println!("UI Tree retrieved, setting up UIExplorer app...");
-
-    // debugging only...
-    // ui_tree.pretty_print_tree();
+    // The shared service discovers desktop membership after the GUI is visible.
+    let ui_tree = UITreeXML::empty();
 
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).    
 

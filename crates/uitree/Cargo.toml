@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-uiautomation.workspace = true
+uiautomation = { workspace = true, features = ["event"] }
 chrono.workspace = true
 log.workspace = true
+windows.workspace = true
+winevent-monitor = { path = "../winevent-monitor" }
 
 bromium-common = { path = "../bromium-common" }
 xmlutil = { path = "../xmlutil" }

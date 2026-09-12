@@ -7,9 +7,9 @@
 //! automate tasks and interact with the Windows UI using Python.
 
 mod app_control;
+mod deadline_worker;
 pub mod exceptions;
 mod logging;
-mod rectangle;
 mod screen_context;
 mod uiauto;
 mod windriver;
@@ -29,6 +29,10 @@ fn bromium(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<logging::LogLevel>()?;
 
     // Custom exceptions
+    m.add(
+        "StaleTreeError",
+        m.py().get_type::<exceptions::StaleTreeError>(),
+    )?;
     m.add(
         "ElementNotFoundError",
         m.py().get_type::<exceptions::ElementNotFoundError>(),

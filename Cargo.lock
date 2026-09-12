@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "bromium"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bromium-common",
  "chrono",
@@ -5193,6 +5193,8 @@ dependencies = [
  "quick-xml 0.38.4",
  "thiserror 2.0.12",
  "uiautomation",
+ "windows 0.61.3",
+ "winevent-monitor",
  "xmlutil",
  "xot 0.31.2",
 ]

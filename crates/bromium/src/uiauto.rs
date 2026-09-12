@@ -5,10 +5,10 @@ use uiautomation::UIElement;
 
 use bromium_common::{RuntimeIdFilter, get_ui_automation_instance};
 
-pub fn get_ui_element_by_runtimeid(runtime_id: Vec<i32>) -> Option<UIElement> {
+pub fn get_ui_element_by_runtimeid(runtime_id: Vec<i32>) -> uiautomation::Result<UIElement> {
     debug!("Searching for element with runtime id: {:?}", runtime_id);
     // let automation = UIAutomation::new().unwrap();
-    let uia = get_ui_automation_instance().ok()?;
+    let uia = get_ui_automation_instance()?;
     let matcher = uia
         .create_matcher()
         .timeout(0)
@@ -19,11 +19,11 @@ pub fn get_ui_element_by_runtimeid(runtime_id: Vec<i32>) -> Option<UIElement> {
     match element {
         Ok(e) => {
             info!("Element found by runtime id: {:?}", e);
-            Some(e)
+            Ok(e)
         }
         Err(e) => {
             error!("Error finding element by runtime id: {:?}", e);
-            None
+            Err(e)
         }
     }
 }
@@ -79,4 +79,3 @@ pub fn supports_select(element: &IUIAutomationElement) -> bool {
 pub fn supports_value(element: &IUIAutomationElement) -> bool {
     unsafe { element.GetCurrentPattern(UIA_ValuePatternId).is_ok() }
 }
-

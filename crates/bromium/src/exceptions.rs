@@ -17,3 +17,4 @@ create_exception!(bromium, AutomationError, PyException);
 // TreeConstructionError — raised when the UI tree cannot be built or refreshed
 // (COM failures, channel timeouts, XML errors).
 create_exception!(bromium, TreeConstructionError, PyTimeoutError);
+create_exception!(bromium, StaleTreeError, PyTimeoutError);

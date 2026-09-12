@@ -358,7 +358,7 @@ pub fn reset_log_file() -> PyResult<()> {
 ///     enable_console (bool | None): Enable console output. Defaults to False.
 ///     enable_file (bool | None): Enable file output. Defaults to True.
 #[pyfunction]
-#[pyo3(name = "init_logging")]
+#[pyo3(name = "init_logging", signature = (log_path=None, log_level=None, enable_console=None, enable_file=None))]
 pub fn py_init_logging(
     log_path: Option<&str>,
     log_level: Option<&str>,

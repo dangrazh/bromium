@@ -1,263 +1,107 @@
 # Bromium
 
-Bromium as a project aims to provide the required infrastructure to automate tasks in Microsoft Windows Desktop Applications. It is devided in two main components:
-- the bromium Python library that provides bindings to interact with the Windows UI Automation API through Rust. It enables users to automate tasks and interact with Windows UI elements programmatically.
-- the UI Expore Desktop application (inspired by inspect.exe) which allows users to inspect the current Windows Desktop, get xpath locators to any ui element on the desktop and test custom xpah locators. It can be run without a need to install the application and without admin rights. This can be built from source by cloning the github repository https://github.com/dangrazh/bromium/
+Bromium provides Windows desktop UI automation through Rust and Python.
 
-## Key Features of python library
+- **Python library:** query UI Automation elements, launch or activate applications,
+  perform mouse/keyboard actions, inspect displays, and capture the primary screen.
+- **UI Explore:** inspect the desktop's cached UI tree, obtain XPath locators, and
+  test queries in a desktop application.
 
-- Get representation of all UI elements on the current desktop (UI tree)
-- Launch an application or activate an already running appliation window
-- Interact with UI elements on the current desktop
-- Get screen context information (size, scaling, etc.)
-- Take screen shots
-- Get cursor position coordinates
-- Retrieve UI element information at specific coordinates
+## Tree state and freshness
 
+Rust owns each driver's cached tree. Startup acquires shallow desktop/window
+membership; descendants are acquired on demand. Events and age checks trigger
+incremental property, child-list, or subtree repairs.
 
+Queries validate relevant coverage within a deadline. If coverage remains stale,
+they raise `bromium.StaleTreeError(TimeoutError)` with `reason`, `scope`,
+`revision`, and `coverage`. Stale coverage is not a definitive no-match.
+An undelivered provider event can remain undetected until age validation; this
+is not an instantaneous, atomic view of every application.
 
-## Installation
+Routine Python refresh calls are unnecessary. Explicit `refresh_region()` is
+available when a caller knows a region needs repair. Successful
+`refresh(window_title="...")` overrides persist; `refresh(None)` retains the
+scope. Assign `driver.window_title = None` to clear it.
 
-```bash.\
-pip install bromium
+`len(driver)`, iteration, `snapshot_elements()`, and returned `Element`
+properties are cached views, not live queries. Query again for updated metadata.
+XPath membership (`xpath in driver`) is a coverage-aware query.
+
+## Python library
+
+Requires Windows and Python 3.12 or later, with a compatible wheel or a source
+build. Local validation covered CPython 3.12 on Windows x64; this is not a
+validation claim for every interpreter/version allowed by package metadata.
+
+```powershell
+python -m pip install bromium
 ```
 
-## Usage
-
-### Quickstart
+The published package may precede this checkout. See the
+[Python README](crates/bromium/README.md) for the full API, logging configuration,
+examples, and failure semantics, and [bromium.pyi](crates/bromium/bromium.pyi)
+for type declarations.
 
 ```python
 import bromium
 
-# Initialize logging (optional, but helpful for debugging)
-bromium.init_logging(log_level="Info", enable_console=True)
-
-# Create a WinDriver — builds the UI Automation tree
-driver = bromium.WinDriver(timeout_ms=5000, window_title=None)
-print(f"Elements in tree: {len(driver)}")
-
-# Get cursor position and find the element under it
-x, y = driver.get_cursor_pos()
-element = driver.get_element_by_coordinates(x, y)
-print(f"Element at cursor: {element.name} ({element.control_type})")
-
-# Look up an element by XPath (retries until timeout_ms if not found)
-found = driver.get_element_by_xpath(element.xpath)
-print(f"Found: {found.name}")
-
-# Click the element
-found.send_click()
-```
-
-### App Launch Example
-
-```python
-import bromium
-import time
-
-bromium.init_logging(log_level="Info", enable_console=True)
-
-driver = bromium.WinDriver(timeout_ms=5000)
-print(f"Driver has {driver.element_count} elements.")
-
-# Launch or activate an application
-app_path = r"ms-teams.exe"
-xpath = r"/Pane[@Name='Desktop 1']/Window[@Name='Microsoft Teams']"
-
+driver = bromium.WinDriver(timeout_ms=5000, window_title="My application")
 try:
-    app_window = driver.launch_or_activate_app(app_path, xpath)
-    print(f"App window: {app_window.name}")
-    time.sleep(3)
-
-    # Refresh the tree in place (no need to reassign)
-    driver.refresh(window_title="Microsoft Teams")
-    print(f"Tree refreshed: {driver.element_count} elements.")
-
-    # Find and click a button
-    login_btn = driver.get_element_by_xpath("//Button[@Name='Sign in']", timeout_ms=3000)
-    login_btn.send_click()
-
-except bromium.ElementNotFoundError:
-    print("Element not found — app may already be logged in.")
-except bromium.AutomationError as e:
-    print(f"Automation error: {e}")
+    buttons = driver.get_elements_by_xpath("//Button")
+    print([button.name for button in buttons])
+except bromium.StaleTreeError as error:
+    print(error.reason, error.coverage)
+    print(driver.tree_status)
 ```
 
-### Iterating & Filtering Elements
+Replace the title with an application on your desktop. The timeout is in
+milliseconds: `5000` means five seconds. Startup has a separate 120-second
+membership budget. Element actions release the GIL but are synchronous and have
+no enforced execution timeout. Serialize calls on a shared Python driver with
+a lock. A permanently blocked provider can consume its capture worker and leave
+later queries stale; a query deadline does not cancel an already-running COM call.
 
-```python
-import bromium
+## Build from this workspace
 
-driver = bromium.WinDriver(timeout_ms=5000)
+Use a Windows Rust toolchain with the MSVC build tools/Windows SDK and a matching
+Python installation. Run from the workspace root:
 
-# Collection protocols
-print(f"Total elements: {len(driver)}")
-print(f"XPath exists: {'//Button[@Name=\"OK\"]' in driver}")
-
-# Iterate all elements
-for elem in driver:
-    if elem.control_type == "Button":
-        print(f"  Button: {elem.name}")
-
-# Filter with find_elements (case-insensitive substring match)
-buttons = driver.find_elements(control_type="Button")
-edits = driver.find_elements(control_type="Edit", name="Search")
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install "maturin>=1.8,<2.0"
+maturin develop --release --manifest-path crates/bromium/Cargo.toml
 ```
 
-## API Reference
+To produce a wheel instead of installing into the active virtual environment:
 
-### Module-level Functions
-
-These are the recommended entry points for logging configuration:
-
-- `init_logging(log_path=None, log_level=None, enable_console=None, enable_file=None) -> None`: Initialize the bromium logging system.
-- `get_version() -> str`: Returns the current bromium version string.
-- `get_log_file() -> str`: Returns the current log file path.
-- `set_log_file(log_file: str) -> None`: Sets the full path for the log file. Creates parent directories if needed.
-- `get_log_level() -> str`: Returns the current logging level as a string.
-- `set_log_level(log_level: str) -> None`: Sets the logging level ("Off", "Error", "Warn", "Info", "Debug", "Trace").
-- `set_log_directory(log_directory: str) -> None`: Sets a custom directory for log files. A timestamped file is created automatically.
-- `enable_console_logging(enable: bool) -> None`: Enable or disable console logging.
-- `enable_file_logging(enable: bool) -> None`: Enable or disable file logging.
-- `reset_log_file() -> None`: Clear all contents from the current log file.
-
-### Exceptions
-
-- `ElementNotFoundError`: Raised when a UI element cannot be located (by xpath, coordinates, or runtime ID).
-- `AutomationError`: Raised when a UI Automation operation fails (click, send_keys, etc.).
-- `TreeConstructionError` (extends `TimeoutError`): Raised when the UI tree cannot be built or refreshed.
-
-### WinDriver
-
-The main class for interacting with the Windows UI Automation tree.
-
-#### Constructor
-
-- `WinDriver(timeout_ms: int, window_title: Optional[str] = None)`: Creates a new driver and builds the UI tree. `timeout_ms` is the default retry duration for element lookups. `window_title` optionally filters the tree to a specific window.
-
-#### Properties
-
-| Property | Type | Access | Description |
-|----------|------|--------|-------------|
-| `timeout_ms` | `int` | read/write | Default timeout in milliseconds for element lookup retries |
-| `element_count` | `int` | read-only | Number of UI elements currently in the tree |
-| `window_title` | `Optional[str]` | read/write | The window title filter, if set |
-
-#### Collection Protocols
-
-- `len(driver)` — returns element count
-- `for elem in driver` — iterates all elements in the tree
-- `xpath in driver` — checks if an XPath exists in the tree
-
-#### Methods
-
-- `get_cursor_pos() -> tuple[int, int]`: Returns the current cursor position as (x, y) coordinates.
-- `get_element_by_coordinates(x: int, y: int) -> Element`: Returns the UI element at the given screen coordinates.
-- `get_element_by_xpath(xpath: str, timeout_ms: Optional[int] = None) -> Element`: Finds an element by XPath. Retries with tree refreshes until `timeout_ms` elapses. When `None`, uses the driver's default `timeout_ms`. Pass `0` to disable retrying.
-- `get_elements_by_xpath(xpath: str) -> list[Element]`: Returns all elements matching an XPath expression.
-- `find_elements(control_type: Optional[str] = None, name: Optional[str] = None) -> list[Element]`: Filters elements by case-insensitive substring match on control type and/or name. Returns an empty list if none match.
-- `refresh(window_title: Optional[str] = None) -> None`: Refreshes the UI tree in place. Uses the stored `window_title` if no argument is provided.
-- `launch_or_activate_app(app_path: str, xpath: str) -> Element`: Launches or activates an application, returning the element matching the XPath.
-- `get_screen_context() -> ScreenContext`: Returns information about all connected display screens.
-- `take_screenshot() -> str`: Takes a screenshot, saves it to a temp directory, and returns the file path.
-- `pretty_print_ui_tree() -> None`: Prints the UI tree to stdout for debugging.
-
-### Element
-
-Represents a Windows UI Automation element.
-
-#### Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `name` | `str` | The name of the UI element |
-| `xpath` | `str` | The XPath locator for this element |
-| `handle` | `int` | The native window handle (HWND) |
-| `control_type` | `str` | The UI Automation control type (e.g. "Button", "Edit") |
-| `runtime_id` | `list[int]` | The runtime ID uniquely identifying this element |
-| `bounding_rectangle` | `tuple[int, int, int, int]` | Bounding rectangle as (left, top, right, bottom) |
-
-#### Methods
-
-- `send_click() -> None`: Sends a click (uses Invoke pattern if available, otherwise mouse click at center).
-- `send_double_click() -> None`: Sends a double-click at the element center.
-- `send_right_click() -> None`: Sends a right-click at the element center.
-- `hold_click(holdkeys: str) -> None`: Clicks while holding modifier keys ("ctrl", "shift", "alt").
-- `send_keys(keys: str) -> None`: Sends keyboard input. Special keys use `{}` syntax (e.g., `{ctrl}{alt}{delete}`). Groups with `()` (e.g., `{ctrl}(AB)` for Ctrl+A+B).
-- `send_text(text: str) -> None`: Sends plain text (uses Value pattern if available, otherwise simulated keystrokes).
-- `hold_send_keys(holdkeys: str, keys: str, interval: int) -> None`: Sends keys while holding modifiers with a custom interval in milliseconds.
-- `show_context_menu() -> None`: Shows the context menu for this element.
-
-### ScreenContext
-
-Information about all display screens in the system. Automatically detects all connected displays on construction.
-
-#### Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `primary_screen` | `ScreenInfo` | The primary display screen |
-| `screens` | `list[ScreenInfo]` | All available display screens |
-
-### ScreenInfo
-
-Information about a single display screen.
-
-#### Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `id` | `int` | Unique identifier associated with the display |
-| `name` | `str` | The display name |
-| `friendly_name` | `str` | The display friendly name |
-| `x` | `int` | The display x coordinate |
-| `y` | `int` | The display y coordinate |
-| `width` | `int` | The display pixel width |
-| `height` | `int` | The display pixel height |
-| `width_mm` | `int` | Width in millimeters (may be 0) |
-| `height_mm` | `int` | Height in millimeters (may be 0) |
-| `rotation` | `float` | Rotation in clock-wise degrees (0, 90, 180, 270) |
-| `scale_factor` | `float` | Pixel scale factor |
-| `frequency` | `float` | Refresh rate |
-| `is_primary` | `bool` | Whether this is the primary display |
-
-### LogLevel
-
-Enum for log level values: `LogLevel.Error`, `LogLevel.Warn`, `LogLevel.Info`, `LogLevel.Debug`, `LogLevel.Trace`, `LogLevel.Off`.
-
-### Bromium (Legacy)
-
-A static-method-only class that mirrors the module-level functions above. Prefer using `bromium.init_logging(...)` directly instead of `Bromium.init_logging(...)`.
-
-## Requirements
-
-- Python 3.12 or higher
-- Windows operating system
-
-## Building from Source
-
-To build the project from source, you'll need:
-
-1. Rust toolchain (cargo, rustc)
-2. Python 3.12+
-3. maturin (for building Python wheels)
-
-```bash
-# Clone the repository
-git clone https://github.com/dangrazh/bromium.git
-cd bromium
-
-# Build the project using maturin
-maturin build
-
-# Install in development mode
-maturin develop
+```powershell
+maturin build --release --manifest-path crates/bromium/Cargo.toml --out target/wheels
 ```
+
+Run UI Explore with both package and binary specified (the package also contains
+a `start_screen` binary):
+
+```powershell
+cargo run -p uiexplore --bin uiexplore --release
+```
+
+UI Explore loads and repairs the tree in the background. Desktop access is
+subject to Windows session, privilege, and provider restrictions.
+
+## Validation and release status
+
+See [Python regression test instructions](crates/bromium/tests/README_INCREMENTAL.md)
+and the [follow-up completion record](PYTHON_LIBRARY_FOLLOWUP_TASKS.md).
+Desktop tests are opt-in; Teams interaction requires a separate opt-in.
+Local correctness tests passed, but representative slow-target performance
+acceptance remains outstanding. See the
+[implementation status](TREE_INCREMENTAL_IMPLEMENTATION_STATUS.md) for limits.
+
+Do not use `ci.ps1` for ordinary local validation: it includes release/version
+and publication operations.
 
 ## License
 
-Apache License 2.0
-
-<!-- ## Contributing
-
-[Add contribution guidelines here] -->
+Apache License 2.0.

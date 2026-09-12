@@ -18,10 +18,17 @@ pub type UIElementInTreeXML = UIElementInTree;
 /// Backward-compatible alias — all three tree walkers now share one `UIElementInTree`.
 pub type UIElementInTreeIter = UIElementInTree;
 
-mod walker_common;
+pub mod capture;
+mod event_handler;
+mod service;
+pub use service::{StaleTree, TreeService};
+mod point;
+pub use point::{element_at_point, window_at_point};
 
 mod uiexplore_xml;
-pub use uiexplore_xml::{UITree, get_all_elements_par_xml, get_all_elements_xml};
+pub use uiexplore_xml::{
+    Coverage, Observation, UITree, get_all_elements_par_xml, get_all_elements_xml,
+};
 
 /// Deprecated: use `UITree` directly.
 pub type UITreeXML = UITree;

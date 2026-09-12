@@ -20,10 +20,23 @@ pub struct XpathDocCache {
     doc_handle: xee_xpath::DocumentHandle,
 }
 
-// SAFETY: XpathDocCache is only ever accessed from the single thread that owns the
-// UITree. The inner Rc<RefCell<…>> inside xee_xpath::Documents is never shared
-// across threads — it is created on the owning thread and all access stays there.
-unsafe impl Send for XpathDocCache {}
+thread_local! {
+    // One document per reader thread: bounded storage, no unsafe transfer of Rc.
+    static DOCUMENT: std::cell::RefCell<Option<(String, XpathDocCache)>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn eval_xpath_thread_cached(expr: &str, xml: &str) -> XpathResult {
+    DOCUMENT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().is_none_or(|(source, _)| source != xml) {
+            *slot = XpathDocCache::new(xml).map(|cache| (xml.to_owned(), cache));
+        }
+        match slot.as_mut() {
+            Some((_, cache)) => eval_xpath_on_cache(expr, cache),
+            None => eval_xpath(expr, xml),
+        }
+    })
+}
 
 impl std::fmt::Debug for XpathDocCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -60,12 +73,7 @@ pub fn eval_xpath_on_cache(expr: &str, cache: &mut XpathDocCache) -> XpathResult
     };
 
     let queries = xee_xpath::Queries::new(static_context_builder);
-    match execute_query(
-        expr,
-        &queries,
-        &mut cache.documents,
-        Some(cache.doc_handle),
-    ) {
+    match execute_query(expr, &queries, &mut cache.documents, Some(cache.doc_handle)) {
         Ok(res) => res,
         Err(e) => XpathResult::new(
             false,

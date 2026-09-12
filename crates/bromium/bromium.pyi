@@ -5,7 +5,7 @@ bromium is a Python library for Windows UI Automation built on Rust + PyO3.
 It provides programmatic access to UI elements via the Windows UI Automation API.
 """
 
-from typing import Iterator, Literal, Optional
+from typing import Optional
 
 # ─── Exceptions ───────────────────────────────────────────────────────────────
 
@@ -18,8 +18,18 @@ class AutomationError(Exception):
     ...
 
 class TreeConstructionError(TimeoutError):
-    """Raised when the UI tree cannot be built or refreshed (COM failures, channel timeouts)."""
+    """Raised when initial desktop membership cannot be acquired within 120 seconds."""
     ...
+
+class StaleTreeError(TimeoutError):
+    """Query, refresh or application discovery could not establish usable coverage.
+
+    Diagnostic attributes are populated on errors raised by driver operations.
+    """
+    reason: str
+    scope: Optional[str]
+    revision: int
+    coverage: str
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -36,7 +46,7 @@ class LogLevel:
 
 def init_logging(
     log_path: Optional[str] = None,
-    log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]] = None,
+    log_level: Optional[str] = None,
     enable_console: Optional[bool] = None,
     enable_file: Optional[bool] = None,
 ) -> None:
@@ -44,10 +54,15 @@ def init_logging(
     Initialize the bromium logging system.
 
     Args:
-        log_path: Directory for log files. Defaults to ~/.bromium.
-        log_level: One of "Off","Error","Warn","Info","Debug","Trace". Defaults to "Info".
+        log_path: Directory for log files. Defaults to %USERPROFILE%/.bromium,
+            with a temporary-directory fallback if unavailable.
+        log_level: Case-insensitive Off/Error/Warn/Info/Debug/Trace string.
+            None or an unrecognized string uses Info. Enum objects are not accepted.
         enable_console: Enable console output. Defaults to False.
         enable_file: Enable file output. Defaults to True.
+
+    Initialization opens a timestamped log file even with file output disabled.
+    File setup failures are reported to stderr, not raised as Python exceptions.
     """
     ...
 
@@ -56,7 +71,7 @@ def get_version() -> str:
     ...
 
 def get_log_file() -> str:
-    """Get the current log file path. Returns default path if not set."""
+    """Get the log path, opening a default file if necessary; empty string on failure."""
     ...
 
 def set_log_file(log_file: str) -> None:
@@ -72,12 +87,13 @@ def get_log_level() -> str:
     """Get the current logging level as a string."""
     ...
 
-def set_log_level(log_level: Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]) -> None:
+def set_log_level(log_level: str) -> None:
     """
     Set the logging level.
 
     Args:
-        log_level: The desired log level.
+        log_level: Case-insensitive Off/Error/Warn/Info/Debug/Trace string.
+            Unknown strings select Info; LogLevel objects are not accepted.
     """
     ...
 
@@ -99,7 +115,7 @@ def enable_file_logging(enable: bool) -> None:
     ...
 
 def reset_log_file() -> None:
-    """Clear all contents from the current log file."""
+    """Truncate the current file; ValueError if none is set, OSError on I/O failure."""
     ...
 
 # ─── Element ──────────────────────────────────────────────────────────────────
@@ -108,8 +124,16 @@ class Element:
     """
     A UI element discovered via the Windows UI Automation API.
 
-    Properties provide read-only access to element metadata.
-    Methods perform actions on the element (click, type, etc.).
+    Properties are captured metadata, not live views; query again to obtain new values.
+    Actions resolve live identity and release the GIL during provider calls. They
+    are synchronous and have no enforced execution deadline: query timeouts do
+    not cancel an action already running in COM.
+
+    Driver-created elements retain an internal lifetime token and invalidate the
+    affected cache after actions, including failed actions. Manual construction
+    remains supported: a supplied HWND must match runtime_id; without a HWND,
+    legacy runtime-ID search is used. Manual elements do not own a tree service
+    or directly invalidate any driver; use events, a new query, or scoped refresh.
     """
 
     def __init__(
@@ -125,7 +149,9 @@ class Element:
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
     def __eq__(self, other: "Element") -> bool: ...
-    def __hash__(self) -> int: ...
+    def __hash__(self) -> int:
+        """Hash runtime ID only, as used by equality; not an incarnation/lifetime check."""
+        ...
 
     # ─── Properties ───────────────────────────────────────────────────────
 
@@ -151,7 +177,7 @@ class Element:
 
     @property
     def runtime_id(self) -> list[int]:
-        """The runtime ID uniquely identifying this element in the current session."""
+        """Captured runtime ID; may be reused after removal, not a permanent identifier."""
         ...
 
     @property
@@ -165,8 +191,8 @@ class Element:
         """
         Send a click to the element.
 
-        Uses the Invoke pattern if supported, otherwise falls back to
-        a coordinate-based mouse click at the element center.
+        Uses Invoke, then SelectionItem if supported; otherwise clicks at the
+        live element center.
 
         Raises:
             ElementNotFoundError: If the element cannot be located.
@@ -286,19 +312,23 @@ class WinDriver:
     lookups) and an optional window-title filter to scope the tree.
 
     Supports Python collection protocols:
-        - ``len(driver)`` — number of elements in the tree
-        - ``for elem in driver`` — iterate all elements
-        - ``xpath in driver`` — check if an XPath exists in the tree
+        - ``len(driver)`` — cached count in scope, possibly incomplete/stale
+        - ``for elem in driver`` — iterate a cached snapshot without acquisition
+        - ``xpath in driver`` — coverage-aware query; may raise stale/invalid errors
+
+    Serialize shared-driver calls with a Python lock. Overlapping mutable calls
+    can raise RuntimeError (already borrowed). Separate drivers own separate services.
     """
 
-    def __init__(self, timeout_ms: int, window_title: Optional[str] = None) -> None:
+    def __init__(self, timeout_ms: Optional[int] = None, window_title: Optional[str] = None) -> None:
         """
-        Create a new WinDriver, building the UI Automation tree.
+        Create a driver with shallow desktop membership and lazy descendants.
 
         Args:
-            timeout_ms: Default timeout in milliseconds for element lookup retries.
-            window_title: Optional window title to filter the tree. If None, the
-                full desktop tree (depth 2) is captured.
+            timeout_ms: Query and launch/activate budget in milliseconds; None is
+                120000. This does not change the initial 120-second startup budget.
+            window_title: Case-sensitive top-level title substring scope; None is
+                unscoped. Startup is shallow regardless of scope; descendants are lazy.
 
         Raises:
             TreeConstructionError: If the UI tree cannot be built within 120 seconds.
@@ -311,11 +341,27 @@ class WinDriver:
     def __iter__(self) -> ElementIterator: ...
     def __contains__(self, xpath: str) -> bool: ...
 
+    @property
+    def tree_status(self) -> str:
+        """Requested scope plus service-wide revision, dirty/unobserved counts and last error.
+
+        Counts describe the whole cache, not just the configured title scope.
+        """
+        ...
+
+    def snapshot_elements(self) -> list[Element]:
+        """Return the latest cached elements in scope without waiting or acquisition.
+
+        Metadata is a snapshot, not a live property view. Inspect tree_status for
+        incomplete coverage. len/iteration/element_count also inspect cached data.
+        """
+        ...
+
     # ─── Properties ───────────────────────────────────────────────────────
 
     @property
     def timeout_ms(self) -> int:
-        """The default timeout in milliseconds for element lookup operations."""
+        """Query and launch/activate budget in milliseconds; not an action timeout."""
         ...
 
     @timeout_ms.setter
@@ -323,7 +369,10 @@ class WinDriver:
 
     @property
     def tree_timeout_secs(self) -> int:
-        """Maximum seconds to wait for UI tree construction (default: 120)."""
+        """Manual refresh and provider-job budget in seconds (default: 120).
+
+        A query still uses timeout_ms; an in-progress COM call cannot be interrupted.
+        """
         ...
 
     @tree_timeout_secs.setter
@@ -331,12 +380,15 @@ class WinDriver:
 
     @property
     def element_count(self) -> int:
-        """Number of UI elements currently in the tree."""
+        """Cached element count in the configured scope; may be incomplete/stale."""
         ...
 
     @property
     def window_title(self) -> Optional[str]:
-        """The window title filter, if set."""
+        """Case-sensitive title substring scope. Setting None clears it.
+
+        Changing this property requests a new view; the next query validates it.
+        """
         ...
 
     @window_title.setter
@@ -353,10 +405,12 @@ class WinDriver:
             y: The y screen coordinate.
 
         Returns:
-            The innermost element containing the point.
+            The exposed hit-test element in the native window under the point.
 
         Raises:
-            ElementNotFoundError: If no element exists at those coordinates.
+            ElementNotFoundError: If no exposed element is found, or the native
+                window under the point is outside the configured title scope.
+            StaleTreeError: If relevant coverage cannot be repaired by timeout_ms.
         """
         ...
 
@@ -364,9 +418,9 @@ class WinDriver:
         """
         Find a single element by XPath.
 
-        If not found immediately, retries with tree refreshes until ``timeout_ms``
-        elapses. When ``timeout_ms`` is None, the driver's default ``timeout_ms``
-        is used. Pass ``0`` to disable retrying.
+        Repair relevant dirty/unobserved coverage incrementally, even for a cached
+        hit. Queueing, repair and no-match retries share one deadline. None uses
+        the driver default. Zero never waits and raises StaleTreeError if dirty.
 
         Args:
             xpath: The XPath locator string.
@@ -378,13 +432,16 @@ class WinDriver:
 
         Raises:
             ElementNotFoundError: If no element matches after the timeout.
-            TreeConstructionError: If tree refresh fails during retries.
+            StaleTreeError: If relevant coverage is still stale at the deadline.
+            ValueError: If the XPath expression is invalid.
         """
         ...
 
     def get_elements_by_xpath(self, xpath: str) -> list[Element]:
         """
-        Find all elements matching an XPath expression.
+        Find all elements after relevant incremental repair within timeout_ms.
+        StaleTreeError and ValueError are never converted into an empty list.
+        Clean absence returns immediately; it does not wait for a match to appear.
 
         Args:
             xpath: The XPath locator string.
@@ -403,7 +460,7 @@ class WinDriver:
         Find elements matching optional filters.
 
         Filters are case-insensitive substring matches applied to all
-        elements currently in the tree.
+        elements in scope after coverage repair. StaleTreeError propagates on expiry.
 
         Args:
             control_type: Filter by control type (e.g. "Button", "Edit").
@@ -430,23 +487,39 @@ class WinDriver:
         """
         ...
 
+    def refresh_region(self, element: Element, timeout_ms: Optional[int] = None) -> None:
+        """Request subtree repair by runtime ID in this driver's cache; scope is unchanged.
+
+        Raises StaleTreeError when its coverage cannot be repaired by the deadline,
+        or ValueError if the element is no longer cached by this driver.
+        None uses driver.timeout_ms, not tree_timeout_secs. This method looks up
+        runtime ID, not the originating Python object's service/incarnation token.
+        """
+        ...
+
     def refresh(self, window_title: Optional[str] = None) -> None:
         """
         Refresh the UI tree by re-scanning the current window state.
 
-        Mutates this driver in place. The old tree is replaced.
+        Reconciles desktop membership and incrementally repairs windows in scope.
+        A title override persists only on success. Clear the scope by assigning
+        window_title = None. Unaffected cached windows remain in the shared store.
 
         Args:
             window_title: Optional title to filter by. If None, uses the
-                stored window_title (if any), or scans the full desktop.
+                stored window_title (if any), or repairs all windows separately.
 
         Raises:
-            TreeConstructionError: If the refresh fails.
+            StaleTreeError: If coverage remains stale at the tree_timeout_secs deadline.
         """
         ...
 
+    def refresh_ui_tree(self, window_title: Optional[str] = None) -> None:
+        """Compatibility alias for refresh(), with identical scope/error behavior."""
+        ...
+
     def pretty_print_ui_tree(self) -> None:
-        """Print the current UI tree to stdout for debugging."""
+        """Print the cached scoped UI tree without provider acquisition."""
         ...
 
     def get_screen_context(self) -> "ScreenContext":
@@ -455,14 +528,17 @@ class WinDriver:
 
         Returns:
             A ScreenContext containing all screen metadata.
+
+        Raises:
+            RuntimeError: Display enumeration failed or no screens were found.
         """
         ...
 
     def take_screenshot(self) -> str:
         """
-        Take a screenshot of the current screen.
+        Take a PNG screenshot of the primary monitor.
 
-        The screenshot is saved to a temporary directory.
+        Saved under %TEMP%/bromium_screenshots; not a combined multi-monitor capture.
 
         Returns:
             The file path of the saved screenshot.
@@ -476,18 +552,27 @@ class WinDriver:
         """
         Launch or activate an application.
 
-        If a window matching the app or XPath is already open, it is brought
-        to the foreground. Otherwise the application is launched from
-        ``app_path`` and the method waits for the window to appear.
+        Discover the first XPath match within the configured title scope and
+        request focus on that live element. Discovery does not match executable
+        names/process IDs. Only a clean no-match launches ``app_path`` once, then
+        waits for an XPath match. A locator missing an existing app can duplicate it.
+        Discovery validates descendant coverage, not just cached membership.
+        Only a clean no-match permits launch. Discovery, process creation,
+        polling and activation share timeout_ms; configured scope is preserved.
+        A timed-out OS/COM operation already started may still finish later.
 
         Args:
-            app_path: Full path to the application executable.
+            app_path: Executable path or name resolved by the OS; no argument list
+                or shell command parsing is provided by this API.
             xpath: XPath identifying an element in the application window.
 
         Returns:
             The Element matching the provided XPath.
 
         Raises:
+            ValueError: Invalid XPath, before any launch.
+            StaleTreeError: Discovery coverage is still stale/incomplete.
+            TimeoutError: The operation deadline expired outside stale discovery.
             AutomationError: If launch/activation fails.
         """
         ...
@@ -588,7 +673,8 @@ class ScreenContext:
     """
     Information about all display screens in the system.
 
-    Automatically detects all connected displays on construction.
+    Captures connected displays on construction; properties do not update live.
+    Raises RuntimeError on enumeration failure or if no displays exist.
     """
 
     def __init__(self) -> None: ...
@@ -597,7 +683,7 @@ class ScreenContext:
 
     @property
     def primary_screen(self) -> ScreenInfo:
-        """The primary display screen."""
+        """The primary display, or the first display if none is flagged primary."""
         ...
 
     @property
@@ -618,13 +704,13 @@ class Bromium:
     @staticmethod
     def init_logging(
         log_path: Optional[str] = None,
-        log_level: Optional[Literal["Off", "Error", "Warn", "Info", "Debug", "Trace"]] = None,
+        log_level: Optional[str] = None,
         enable_console: Optional[bool] = None,
         enable_file: Optional[bool] = None,
     ) -> None: ...
 
     @staticmethod
-    def get_win_driver(timeout_ms: int, window_title: Optional[str] = None) -> WinDriver: ...
+    def get_win_driver(timeout_ms: Optional[int] = None, window_title: Optional[str] = None) -> WinDriver: ...
 
     @staticmethod
     def get_version() -> str: ...

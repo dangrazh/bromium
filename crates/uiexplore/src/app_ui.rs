@@ -1,22 +1,19 @@
 use time::{Duration, OffsetDateTime as DateTime};
 use xmlutil::{XpathResult, xpath_eval};
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use eframe::egui;
 use egui::Response; // TextBuffer
 // use egui_code_editor::{CodeEditor, ColorTheme, Syntax};
 
-use windows::Win32::Foundation::{HWND, POINT, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetCursorPos, WindowFromPoint};
+use windows::Win32::Foundation::{POINT, RECT};
+use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 #[allow(unused)]
-use crate::{AppContext, border_window::BorderWindow, rectangle}; //winevent
-use uitree::{SaveUIElementXML, UIElementInTreeXML, UITreeError, UITreeXML, get_all_elements_xml}; //SaveUIElement,
-use winevent_monitor::WinEventMonitor;
+use crate::{AppContext, border_window::BorderWindow};
+use uitree::{SaveUIElementXML, UITreeXML};
 
 #[derive(Clone, Debug)]
 struct TreeState {
@@ -171,15 +168,9 @@ impl DeduplicatedHistory {
 }
 
 #[derive(Debug)]
-// #[allow(dead_code)]
-struct LastRefresh {
-    time: std::time::Instant,
-}
-#[derive(Debug)]
 enum AppMode {
-    Normal(LastRefresh),
+    Normal,
     NeedsTreeRefresh,
-    IsRefreshingTree(Receiver<Result<UITreeXML, UITreeError>>),
 }
 
 #[derive(PartialEq)]
@@ -190,12 +181,10 @@ enum DisplayMode {
 
 // #[allow(dead_code)]
 pub struct UIExplorer {
-    app_name: String,
     app_context: AppContext,
     recording: bool,
     show_history: bool,
     highlighting: bool,
-    auto_refresh: bool,
     simple_xpath: bool,
     xpath_input: Option<String>,
     xpath_eval_result: Option<XpathResult>,
@@ -206,101 +195,46 @@ pub struct UIExplorer {
     status_msg: Option<AppStatusMsg>,
     app_mode: AppMode,
     display_mode: DisplayMode,
-    winevent_monitor: WinEventMonitor,
+    service: uitree::TreeService,
+    pending_query: Option<(String, Receiver<Result<UITreeXML, uitree::StaleTree>>)>,
+    evaluated_xpath: Option<String>,
     border_window: Option<BorderWindow>,
 }
 
 impl UIExplorer {
     #[allow(dead_code)]
     pub fn new(caption: String) -> Self {
-        let app_name = caption.clone();
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        let cancel_clone = Some(Arc::clone(&cancel_flag));
-        let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-        thread::spawn(move || {
-            get_all_elements_xml(tx, None, None, Some(app_name), None, cancel_clone);
-        });
-
-        const TREE_TIMEOUT_SECS: u64 = 120;
-        let (ui_tree, status_msg) =
-            match rx.recv_timeout(std::time::Duration::from_secs(TREE_TIMEOUT_SECS)) {
-                Ok(Ok(tree)) => (tree, None),
-                Ok(Err(e)) => {
-                    cancel_flag.store(true, Ordering::Relaxed);
-                    let msg = format!("UI tree construction failed: {}", e);
-                    eprintln!("{}", msg);
-                    (
-                        UITreeXML::empty(),
-                        Some(AppStatusMsg::new_with_duration(msg, Duration::seconds(10))),
-                    )
-                }
-                Err(e) => {
-                    cancel_flag.store(true, Ordering::Relaxed);
-                    let msg = format!("UI tree construction timed out: {}", e);
-                    eprintln!("{}", msg);
-                    (
-                        UITreeXML::empty(),
-                        Some(AppStatusMsg::new_with_duration(msg, Duration::seconds(10))),
-                    )
-                }
-            };
-
-        let app_context = AppContext::new_from_screen(0.4, 0.8);
-
-        let border_window = BorderWindow::new()
-            .map_err(|e| eprintln!("Failed to create border overlay: {e}"))
-            .ok();
-
-        Self {
-            app_name: caption,
-            app_context,
-            recording: false,
-            show_history: false,
-            highlighting: false,
-            auto_refresh: false,
-            simple_xpath: false,
-            xpath_input: None,
-            xpath_eval_result: None,
-            xpath_highlighting: false,
-            ui_tree,
-            tree_state: None,
-            history: DeduplicatedHistory::default(),
-            status_msg,
-            app_mode: AppMode::Normal(LastRefresh {
-                time: std::time::Instant::now(),
-            }),
-            display_mode: DisplayMode::Explore,
-            winevent_monitor: WinEventMonitor::new(),
-            border_window,
-        }
+        Self::new_with_state(
+            caption,
+            AppContext::new_from_screen(0.4, 0.8),
+            UITreeXML::empty(),
+        )
     }
 
     // #[allow(dead_code)]
-    pub fn new_with_state(caption: String, app_context: AppContext, ui_tree: UITreeXML) -> Self {
+    pub fn new_with_state(_caption: String, app_context: AppContext, ui_tree: UITreeXML) -> Self {
         let border_window = BorderWindow::new()
             .map_err(|e| eprintln!("Failed to create border overlay: {e}"))
             .ok();
 
         Self {
-            app_name: caption,
             app_context,
             recording: false,
             show_history: false,
             highlighting: false,
-            auto_refresh: false,
             simple_xpath: false,
             xpath_input: None,
             xpath_eval_result: None,
             xpath_highlighting: false,
+            service: uitree::TreeService::from_tree(ui_tree.clone()),
+            pending_query: None,
+            evaluated_xpath: None,
             ui_tree,
             tree_state: None,
             history: DeduplicatedHistory::default(),
             status_msg: None,
-            app_mode: AppMode::Normal(LastRefresh {
-                time: std::time::Instant::now(),
-            }),
+            app_mode: AppMode::Normal,
             display_mode: DisplayMode::Explore,
-            winevent_monitor: WinEventMonitor::new(),
             border_window,
         }
     }
@@ -331,7 +265,20 @@ impl UIExplorer {
 
             if tree.children(child_index).is_empty() {
                 // Node has no children, so just show a label
-                let lbl = egui::Label::new(format!("  {}", name)).truncate();
+                let lbl = egui::Label::new(format!(
+                    "  {}{}",
+                    name,
+                    if tree
+                        .coverage(child_index)
+                        .is_some_and(|c| c.children_observed)
+                    {
+                        ""
+                    } else {
+                        " [not captured]"
+                    }
+                ))
+                .truncate()
+                .sense(egui::Sense::click());
                 let entry: Response = if is_active_element {
                     let weak_bg_fill = ui
                         .ctx()
@@ -379,7 +326,7 @@ impl UIExplorer {
                             .open(Some(true));
                     } else {
                         header = egui::CollapsingHeader::new(short_name)
-                            .open(Some(false))
+                            .default_open(false)
                             .id_salt(format!("ch_node{}", child_index))
                     }
                 } else {
@@ -422,7 +369,7 @@ impl UIExplorer {
                 ui.add_space(2.0);
 
                 ui.horizontal(|ui| match self.app_mode {
-                    AppMode::Normal(_) => {
+                    AppMode::Normal => {
                         if let Some(msg) = &self.status_msg {
                             ui.label(&msg.status_msg);
                         } else {
@@ -473,22 +420,12 @@ impl UIExplorer {
                     )
                 {
 
-                    // update the last refresh time to avoid excessive refreshes
-                    // when auto_refresh is set and mouse is moving
-                    if self.auto_refresh
-                        && let AppMode::Normal(_) = self.app_mode
-                    {
-                        self.app_mode =
-                            AppMode::Normal(LastRefresh {
-                                time: std::time::Instant::now(),
-                            });
-                    }
                     continue;
                 }
 
                     // for the visual event summary
                     if self.show_history {
-                        let summary = event_summary(event, self.ui_tree.get_elements());
+                        let summary = event_summary(event, &self.ui_tree);
                         let full = format!("{event:#?}");
                         self.history.add(summary, full);
                     }
@@ -501,6 +438,7 @@ impl UIExplorer {
             // render the ui elements
             ui.horizontal(|ui| {
 
+                ui.label(self.service.status());
                 ui.label("Mode: ");
                 ui.radio_value(&mut self.display_mode, DisplayMode::Explore, "Explore");
                 ui.radio_value(&mut self.display_mode, DisplayMode::XpathTest, "Test Xpath");
@@ -526,22 +464,10 @@ impl UIExplorer {
                         ui.label(" | ");
                         ui.add_space(2.0);
 
-                        if ui.checkbox(&mut self.auto_refresh, "Auto Refresh").on_hover_text("When enabled, the UI tree is automatically refreshed when changes are detected in the Windows UI Tree.").clicked() {
-                            if self.auto_refresh {
-                                if let AppMode::Normal(_) = self.app_mode {
-                                    self.app_mode = AppMode::Normal(LastRefresh { time: std::time::Instant::now() });
-                                }
-                                self.set_status("Auto Refresh enabled".to_string(), Duration::seconds(2));
-                            } else {
-                                self.set_status("Auto Refresh disabled".to_string(), Duration::seconds(2));
-                            }
+                        ui.label("Incremental updates active");
+                        if ui.button("🔄").on_hover_text("Refresh selected region (or desktop membership)").clicked() {
+                            self.app_mode = AppMode::NeedsTreeRefresh;
                         }
-                        // only show the refresh button when auto refresh is disabled
-                        if !self.auto_refresh
-                            && ui.button("🔄").on_hover_text("Refresh").clicked() {
-                                self.app_mode = AppMode::NeedsTreeRefresh;
-                                self.set_status("Refreshing UI Tree...".to_string(), Duration::seconds(5));
-                            }
                         ui.add_space(2.0);
                         ui.label(" | ");
                         ui.add_space(2.0);
@@ -562,10 +488,9 @@ impl UIExplorer {
                 }
 
                 // When highlighting is toggled off, hide the border overlay
-                if prev_highlight && !self.highlighting {
-                    if let Some(border) = &self.border_window {
+                if prev_highlight && !self.highlighting
+                    && let Some(border) = &self.border_window {
                         border.hide();
-                    }
                 }
 
 
@@ -598,7 +523,7 @@ impl UIExplorer {
             .show(ctx, |ui| {
                 // .min_width(300.0).max_width(600.0)
                 match self.app_mode {
-                    AppMode::Normal(_) => {
+                    AppMode::Normal => {
                         egui::ScrollArea::vertical()
                             .auto_shrink(false)
                             .show(ui, |ui| {
@@ -722,141 +647,109 @@ impl UIExplorer {
 
     #[inline(always)]
     fn render_xpath_screen(&mut self, ctx: &egui::Context, state: &mut TreeState) {
-        // Store the input in a struct field to persist between frames
-        if self.xpath_input.is_none() {
-            self.xpath_input = Some(String::new());
-        }
-        let xpath_input = self.xpath_input.as_mut().unwrap();
-
-        let screen_size = ctx.screen_rect();
-        let screen_width = screen_size.width();
-        let elem_width = screen_width * 0.9;
-
+        let input = self.xpath_input.get_or_insert_with(String::new);
+        let mut submit = None;
         egui::CentralPanel::default().show(ctx, |ui| {
-            // let mut result = "".to_string();
-            let placeholder = "Enter the xpath expression you want to test and press the <ENTER> key".to_string();
-
-            ui.add_space(4.0);
-            // Text edit with hint text
-            let response = ui.add(
-                egui::TextEdit::singleline(xpath_input)
-                    .hint_text(placeholder)
-                    .desired_width(elem_width)
-            );
-
-            // Render the theme selector
-            let mut theme =
-                egui_extras::syntax_highlighting::CodeTheme::from_memory(ui.ctx(), ui.style());
-
-            ui.collapsing("Theme", |ui| {
-                ui.group(|ui| {
-                    theme.ui(ui);
-                    theme.clone().store_in_memory(ui.ctx());
-                });
-            });
-
-
-            // Check if Enter was pressed while the text edit had focus
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-
-                // Use the entered text and evaluate the expression
-                let expr = xpath_input.clone();
-                // Patch the xpath with /@RtID if it is missing
-                let expr = if !expr.ends_with("/@RtID") {expr + "/@RtID"} else {expr};
-
-                let srcxml = self.ui_tree.get_xml_dom_tree().to_string();
-                let eval_result = xpath_eval::eval_xpath(&expr, &srcxml);
-                self.xpath_eval_result = Some(eval_result);
-
+            ui.label("XPath (queries wait up to 5 seconds for relevant cached coverage)");
+            let response = ui.text_edit_singleline(input);
+            if response.changed() {
+                self.xpath_eval_result = None;
+                self.evaluated_xpath = None;
+                self.xpath_highlighting = false;
+                if let Some(border) = &self.border_window {
+                    border.hide();
+                }
             }
-
-            if let Some(outcome) = self.xpath_eval_result.clone() {
-                ui.add_space(8.0);
-
-                // render the result
-                if !outcome.is_success() {
-                    // display the error message
-                    let mut error_msg = outcome.get_error_msg().to_string();
-                    ui.add(egui::TextEdit::multiline(&mut error_msg)
-                                                    .desired_width(elem_width)
-                                                    .code_editor()
-                        );
-                } else {
-                    // display the result
-                    let res_cnt = outcome.get_result_count();
-                    let item_cnt = format!("Number of items matching expression: {}", res_cnt);
-                    let mut itms: String;
-                    if res_cnt > 1 {
-                        itms = outcome.get_result_items().iter().map(|s| s.get_item_xml()).collect::<Vec<_>>().join("\n\n----------------------- next item -----------------------\n\n\n");
-                    } else {
-                        itms = outcome.get_result_items().iter().map(|s| s.get_item_xml()).collect::<Vec<_>>().join("\n");
-                    }
-
-                    // if single item found, set flag to do the highlighting (if highlighting is enabled)
-                    self.xpath_highlighting = res_cnt == 1;
-
-                    ui.label(item_cnt);
-                    ui.add_space(6.0);
-                    ui.label("Matching elements:");
-                    ui.add_space(6.0);
-
-                    // render the code editor
-                    let language = "xml".to_string();
-
-                    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                        let mut layout_job = egui_extras::syntax_highlighting::highlight(
-                            ui.ctx(),
-                            ui.style(),
-                            &theme,
-                            buf.as_str(),
-                            language.as_str(),
-                        );
-                        layout_job.wrap.max_width = wrap_width;
-                        ui.fonts(|f| f.layout_job(layout_job))
-                    };
-
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                submit = Some(input.clone());
+            }
+            if self.pending_query.is_some() {
+                ui.spinner();
+                ui.label("Updating relevant coverage…");
+            }
+            if let Some(result) = &self.xpath_eval_result {
+                if result.is_success() {
+                    ui.label(format!(
+                        "{} matches · revision {}",
+                        result.get_result_count(),
+                        self.ui_tree.revision()
+                    ));
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut itms)
-                                .font(egui::TextStyle::Monospace) // for cursor height
-                                .code_editor()
-                                .desired_rows(10)
-                                .lock_focus(true)
-                                .desired_width(f32::INFINITY)
-                                .layouter(&mut layouter),
-                        );
+                        for item in result.get_result_items() {
+                            ui.monospace(item.get_item_xml());
+                        }
                     });
-
+                } else {
+                    ui.label(result.get_error_msg());
                 }
             }
         });
-
-        // if do_highligting is true, set active element to found item and render the
-        // frame around the active element on the screen (if highlighting is enabled)
-        if self.xpath_highlighting {
-            if let Some(elem) = self.ui_tree.get_element_by_xpath(xpath_input.as_str()) {
-                // log::debug!("Element found by xpath: {}", elem.get_name());
-                let runtime_id = elem
-                    .get_runtime_id()
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<String>>()
-                    .join("-");
-                if let Some(node) = self
-                    .ui_tree
-                    .get_tree()
-                    .get_element_by_runtime_id(runtime_id.as_str())
-                {
-                    let idx = node.index;
-                    // log::debug!("Index in tree: {}", idx);
-                    // update the state with the new active element
-                    state.update_state(elem.clone(), idx);
-                    self.process_highlighting(state);
-                } else {
-                    // log::debug!("Element not found in tree by runtime id");
+        if let Some(expr) = submit.filter(|_| self.pending_query.is_none()) {
+            // Validate before scheduling acquisition.
+            if self.ui_tree.query(&expr).is_err() {
+                self.xpath_eval_result = Some(xpath_eval::eval_xpath(
+                    &expr,
+                    self.ui_tree.get_xml_dom_tree(),
+                ));
+                return;
+            }
+            let service = self.service.clone();
+            let (tx, rx) = channel();
+            let wake = ctx.clone();
+            let query = expr.clone();
+            thread::spawn(move || {
+                let result = service.ensure_query(
+                    &query,
+                    None,
+                    std::time::Instant::now() + std::time::Duration::from_secs(5),
+                );
+                let _ = tx.send(result);
+                wake.request_repaint();
+            });
+            self.pending_query = Some((expr, rx));
+            self.xpath_eval_result = None;
+        }
+        if let Some((expr, rx)) = &self.pending_query {
+            match rx.try_recv() {
+                Ok(Ok(tree)) => {
+                    let expr = expr.clone();
+                    if self.xpath_input.as_deref() == Some(expr.as_str())
+                        && tree.revision() == self.service.revision()
+                    {
+                        self.ui_tree = tree;
+                        self.xpath_eval_result = Some(xpath_eval::eval_xpath(
+                            &format!("({expr})/@RtID"),
+                            self.ui_tree.get_xml_dom_tree(),
+                        ));
+                        self.evaluated_xpath = Some(expr);
+                    }
+                    self.pending_query = None;
                 }
-            } else {
-                // log::debug!("No element found by xpath");
+                Ok(Err(e)) => {
+                    self.set_status(e.to_string(), Duration::seconds(30));
+                    self.pending_query = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.set_status(
+                        "Query worker disconnected; cached result unavailable".into(),
+                        Duration::seconds(30),
+                    );
+                    self.pending_query = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(expr) = &self.evaluated_xpath
+            && let Ok(elements) = self.ui_tree.query(expr)
+        {
+            if elements.len() == 1 {
+                let props = elements[0];
+                if let Some(id) = self.ui_tree.index_for_id(props.get_runtime_id()) {
+                    state.update_state(props.clone(), id);
+                    self.process_highlighting(state);
+                }
+            } else if let Some(border) = &self.border_window {
+                border.hide();
             }
         }
     }
@@ -865,53 +758,65 @@ impl UIExplorer {
     fn process_event(&mut self, event: &egui::Event, state: &mut TreeState) {
         match event {
             egui::Event::MouseMoved { .. } => {
-                // Get cursor position in raw screen coordinates and scaled coordinates
-                let mut raw_cursor_pos = POINT::default();
-                let cursor_position = unsafe {
-                    GetCursorPos(&mut raw_cursor_pos).unwrap();
-                    POINT {
-                        x: (raw_cursor_pos.x as f32 / self.app_context.screen_scale) as i32,
-                        y: (raw_cursor_pos.y as f32 / self.app_context.screen_scale) as i32,
-                    }
-                };
-
-                // Use WindowFromPoint to determine which top-level window is
-                // visually on top at the cursor position, then restrict the
-                // element search to that window's z-order group.
-                let target_z = Self::resolve_z_order_at_point(
-                    &raw_cursor_pos,
-                    self.ui_tree.get_elements(),
-                );
-
-                if let Some(ui_element_props) = rectangle::get_point_bounding_rect(
-                    &cursor_position,
-                    self.ui_tree.get_elements(),
-                    target_z,
-                ) {
-                    state.update_state(
-                        ui_element_props.get_element_props().clone(),
-                        ui_element_props.get_tree_index(),
+                self.track_point(state);
+            }
+            egui::Event::Key {
+                key: egui::Key::Escape,
+                pressed: false,
+                ..
+            } => {
+                // physical_key, repeat, modifiers
+                // log::debug!("Key event received: {:?}, pressed: {}", key, pressed);
+                // check if tracking is enabled, if yes, desable tracking
+                // if not, ignore the escape key
+                if self.recording {
+                    self.recording = false;
+                    self.set_status("Tracking disabled".to_string(), Duration::seconds(2));
+                } else {
+                    self.set_status(
+                        "No tracking active, ignoring Escape key".to_string(),
+                        Duration::seconds(2),
                     );
                 }
             }
-            egui::Event::Key { key, pressed, .. } => {
-                // physical_key, repeat, modifiers
-                // log::debug!("Key event received: {:?}, pressed: {}", key, pressed);
-                if key == &egui::Key::Escape && !*pressed {
-                    // check if tracking is enabled, if yes, desable tracking
-                    // if not, ignore the escape key
-                    if self.recording {
-                        self.recording = false;
-                        self.set_status("Tracking disabled".to_string(), Duration::seconds(2));
-                    } else {
-                        self.set_status(
-                            "No tracking active, ignoring Escape key".to_string(),
-                            Duration::seconds(2),
-                        );
-                    }
-                }
-            }
             _ => (),
+        }
+    }
+
+    #[inline(always)]
+    fn track_point(&mut self, state: &mut TreeState) {
+        let mut point = POINT::default();
+        if unsafe { GetCursorPos(&mut point) }.is_err() {
+            return;
+        }
+        let window = uitree::window_at_point(point.x, point.y).and_then(|handle| {
+            self.ui_tree
+                .children(0)
+                .iter()
+                .copied()
+                .find(|&id| self.ui_tree.node(id).1.get_handle() == handle)
+        });
+        if let Some(window) = window {
+            // Zero wait schedules missing repair; never block an egui frame on COM.
+            if let Ok(tree) = self
+                .service
+                .ensure_region(window, std::time::Instant::now())
+                && tree.revision() == self.ui_tree.revision()
+                && let Some(element) = uitree::element_at_point(&tree, point.x, point.y)
+            {
+                state.update_state(
+                    element.get_element_props().clone(),
+                    element.get_tree_index(),
+                );
+                return;
+            }
+        } else {
+            self.service.request_region(0);
+        }
+        state.active_element = None;
+        state.active_ui_element = None;
+        if let Some(border) = &self.border_window {
+            border.hide();
         }
     }
 
@@ -920,16 +825,12 @@ impl UIExplorer {
         if let Some(border) = &self.border_window {
             if self.highlighting {
                 if let Some(active_element) = &state.active_element {
-                    let scale = self.app_context.screen_scale;
+                    let bounds = active_element.get_bounding_rectangle();
                     let rect = RECT {
-                        left: (active_element.get_bounding_rectangle().get_left() as f32 * scale)
-                            as i32,
-                        top: (active_element.get_bounding_rectangle().get_top() as f32 * scale)
-                            as i32,
-                        right: (active_element.get_bounding_rectangle().get_right() as f32 * scale)
-                            as i32,
-                        bottom: (active_element.get_bounding_rectangle().get_bottom() as f32
-                            * scale) as i32,
+                        left: bounds.get_left(),
+                        top: bounds.get_top(),
+                        right: bounds.get_right(),
+                        bottom: bounds.get_bottom(),
                     };
                     border.update(rect);
                 }
@@ -937,34 +838,6 @@ impl UIExplorer {
                 border.hide();
             }
         }
-    }
-
-    /// Determine the z-order of the top-level window that is visually on top
-    /// at the given *raw* (unscaled) screen point.
-    ///
-    /// Uses `WindowFromPoint` to find the actual topmost HWND, walks up to
-    /// the root ancestor, then scans the level-1 elements in the UI tree for
-    /// a matching window handle.  Returns `Some(z_order)` when found, or
-    /// `None` when the window isn't part of the captured UI tree (in which
-    /// case the caller should fall back to an unfiltered search).
-    fn resolve_z_order_at_point(
-        raw_point: &POINT,
-        elements: &[uitree::UIElementInTreeXML],
-    ) -> Option<usize> {
-        let top_handle: isize = unsafe {
-            let hwnd: HWND = WindowFromPoint(*raw_point);
-            if hwnd.is_invalid() {
-                return None;
-            }
-            GetAncestor(hwnd, GA_ROOT).0 as isize
-        };
-        elements
-            .iter()
-            .find(|e| {
-                let p = e.get_element_props();
-                p.get_level() == 1 && p.get_handle() == top_handle
-            })
-            .map(|e| e.get_element_props().get_z_order())
     }
 
     fn set_status(&mut self, msg: String, duration: Duration) {
@@ -979,6 +852,8 @@ impl UIExplorer {
 
 impl eframe::App for UIExplorer {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let wake = ctx.clone();
+        self.service.set_waker(move || wake.request_repaint());
         // Take ownership of the TreeState to avoid cloning every frame.
         // It is stored back into self.tree_state at the end of update().
         let mut state = self.tree_state.take().unwrap_or_else(TreeState::new);
@@ -1000,70 +875,45 @@ impl eframe::App for UIExplorer {
             }
         }
 
-        // manage the AppMode / Tree refresh lifecycle
-        match &self.app_mode {
-            AppMode::Normal(last_refesh) => {
-                if self.auto_refresh {
-                    // switch from reactive mode to continuous mode to
-                    // ensure the UI is rendered and with that the WinEvents are processed
-                    // continuously even if the mouse is outside the app window
-                    ctx.request_repaint();
-                }
-
-                // check for WinEvents indicating a change in the UI tree
-                // to avoid excessive refresh, only check every 2 seconds and
-                // only if not currently recording (tracking) the cursor
-                if !self.recording && self.auto_refresh && last_refesh.time.elapsed().as_secs() > 2
-                {
-                    log::debug!("Checking for WinEvents");
-                    let winevents = self.winevent_monitor.check_for_events();
-                    if !winevents.is_empty() {
-                        log::debug!("Checked for WinEvents, found {} events", winevents.len());
-                        self.app_mode = AppMode::NeedsTreeRefresh;
-                        self.set_status(
-                            "UI Tree change detected, refreshing...".to_string(),
-                            Duration::seconds(5),
-                        );
-                    }
-                }
-            }
-            AppMode::NeedsTreeRefresh => {
-                let app_name = self.app_name.clone();
-                let (tx, rx): (Sender<_>, Receiver<Result<UITreeXML, UITreeError>>) = channel();
-                thread::spawn(|| {
-                    get_all_elements_xml(tx, None, None, Some(app_name), None, None);
-                });
-                self.app_mode = AppMode::IsRefreshingTree(rx);
-                state.active_element = None;
-            }
-            AppMode::IsRefreshingTree(rx) => {
-                match rx.try_recv() {
-                    Ok(Ok(new_ui_tree)) => {
-                        self.ui_tree = new_ui_tree;
-                        state = TreeState::new(); // reset the tree state
-                        self.tree_state = Some(state);
-                        self.app_mode = AppMode::Normal(LastRefresh {
-                            time: std::time::Instant::now(),
-                        });
-                        self.set_status("UI Tree refreshed".to_string(), Duration::seconds(2));
-                        // return to avoid conflicts with the UI rendering below in particular the state variable
-                        return;
-                    }
-                    Ok(Err(e)) => {
-                        self.app_mode = AppMode::Normal(LastRefresh {
-                            time: std::time::Instant::now(),
-                        });
-                        self.set_status(
-                            format!("UI Tree refresh failed: {}", e),
-                            Duration::seconds(5),
-                        );
-                        return;
-                    }
-                    Err(_) => {
-                        // Not ready yet, keep waiting
-                    }
+        // Polling is bounded and independent of pointer activity; queries additionally
+        // wake the GUI on completion. Only committed revisions are rendered.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        if matches!(self.app_mode, AppMode::NeedsTreeRefresh) {
+            self.service
+                .request_region(state.active_ui_element.unwrap_or(0));
+            self.app_mode = AppMode::Normal;
+        }
+        if self.service.revision() != self.ui_tree.revision() {
+            let current = self.service.snapshot();
+            let selected = state
+                .active_element
+                .as_ref()
+                .map(|p| p.get_runtime_id().to_vec());
+            self.ui_tree = current;
+            self.xpath_eval_result = None;
+            self.evaluated_xpath = None;
+            self.xpath_highlighting = false;
+            if let Some(id) = selected.and_then(|id| self.ui_tree.index_for_id(&id)) {
+                state.active_element = Some(self.ui_tree.node(id).1.clone());
+                state.active_ui_element = Some(id);
+                state.refresh_path_to_active_ui_element = true;
+            } else {
+                state = TreeState::new();
+                if let Some(border) = &self.border_window {
+                    border.hide();
                 }
             }
+        }
+        if let Some(id) = state.active_ui_element
+            && !self
+                .ui_tree
+                .coverage(id)
+                .is_some_and(|c| c.children_observed)
+        {
+            self.service.request_region(id);
+        }
+        if self.recording {
+            self.track_point(&mut state);
         }
 
         // Rendering the ui
@@ -1095,18 +945,20 @@ impl eframe::App for UIExplorer {
     }
 }
 
-fn event_summary(event: &egui::Event, ui_elements: &[UIElementInTreeXML]) -> String {
+fn event_summary(event: &egui::Event, tree: &UITreeXML) -> String {
     match event {
         egui::Event::PointerMoved { .. } => "PointerMoved { .. }".to_owned(),
         egui::Event::MouseMoved { .. } => {
             let cursor_position = unsafe {
                 let mut cursor_pos = POINT::default();
-                GetCursorPos(&mut cursor_pos).unwrap();
+                if GetCursorPos(&mut cursor_pos).is_err() {
+                    return "Cursor unavailable".into();
+                }
                 cursor_pos
             };
 
             if let Some(ui_element_props) =
-                rectangle::get_point_bounding_rect(&cursor_position, ui_elements, None)
+                uitree::element_at_point(tree, cursor_position.x, cursor_position.y)
             {
                 // format!("MouseMoved {{ x: {}, y: {} }} over {}", cursor_position.x, cursor_position.y, ui_element_props.name)
                 let ui_element_props = ui_element_props.get_element_props();

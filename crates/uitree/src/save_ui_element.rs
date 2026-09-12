@@ -15,7 +15,7 @@ pub struct SaveUIElement {
     automation_id: String,
     handle: isize,
     bounding_rect: uiautomation::types::Rect,
-    bounding_rect_size: i32,
+    bounding_rect_size: i64,
     level: usize,
     z_order: usize,
     xpath: Option<String>,
@@ -42,8 +42,9 @@ impl SaveUIElement {
         let bounding_rect = element
             .get_bounding_rectangle()
             .unwrap_or(uiautomation::types::Rect::new(0, 0, 0, 0));
-        let bounding_rect_size = (bounding_rect.get_right() - bounding_rect.get_left())
-            * (bounding_rect.get_bottom() - bounding_rect.get_top());
+        let bounding_rect_size = (i64::from(bounding_rect.get_right())
+            - i64::from(bounding_rect.get_left()))
+            * (i64::from(bounding_rect.get_bottom()) - i64::from(bounding_rect.get_top()));
 
         SaveUIElement {
             name,
@@ -86,7 +87,7 @@ impl SaveUIElement {
     pub fn get_handle(&self) -> isize {
         self.handle
     }
-    pub fn get_bounding_rect_size(&self) -> i32 {
+    pub fn get_bounding_rect_size(&self) -> i64 {
         self.bounding_rect_size
     }
     pub fn get_bounding_rectangle(&self) -> &uiautomation::types::Rect {
@@ -119,6 +120,48 @@ impl SaveUIElement {
 
     pub fn set_xpath(&mut self, xpath: String) {
         self.xpath = Some(xpath)
+    }
+
+    pub(crate) fn set_context(&mut self, level: usize, z_order: usize) {
+        self.level = level;
+        self.z_order = z_order;
+        self.xpath = None;
+    }
+
+    /// Read one cached property bundle. A failed read rejects the observation.
+    pub(crate) fn from_cache(element: &UIElement) -> uiautomation::Result<Self> {
+        let runtime_id = element.get_runtime_id()?;
+        if runtime_id.is_empty() {
+            return Err(uiautomation::Error::new(1, "Missing runtime ID"));
+        }
+        let bounding_rect = element.get_cached_bounding_rectangle()?;
+        Ok(Self {
+            name: element.get_cached_name()?,
+            classname: element.get_cached_classname()?,
+            control_type: element.get_cached_control_type()?.to_string(),
+            localized_control_type: element.get_cached_localized_control_type()?,
+            framework_id: element.get_cached_framework_id()?,
+            runtime_id,
+            automation_id: element.get_cached_automation_id()?,
+            handle: element.get_cached_native_window_handle()?.into(),
+            bounding_rect_size: (i64::from(bounding_rect.get_right())
+                - i64::from(bounding_rect.get_left()))
+                * (i64::from(bounding_rect.get_bottom()) - i64::from(bounding_rect.get_top())),
+            bounding_rect,
+            level: 0,
+            z_order: 0,
+            xpath: None,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(id: i32, name: &str, control_type: &str) -> Self {
+        Self {
+            runtime_id: vec![42, id],
+            name: name.into(),
+            control_type: control_type.into(),
+            ..Self::default()
+        }
     }
 
     pub fn get_ui_automation_ui_element(&self) -> Option<UIElement> {

@@ -2,6 +2,39 @@
 
 use crate::UIHashMap;
 
+/// Monotonic IDs with reclaimable storage: no tombstone growth and no ID reuse.
+#[derive(Debug, Clone)]
+struct NodeStorage<T> {
+    entries: UIHashMap<usize, UITreeNode<T>>,
+    next: usize,
+}
+impl<T> NodeStorage<T> {
+    fn new(root: UITreeNode<T>) -> Self {
+        Self {
+            entries: [(0, root)].into_iter().collect(),
+            next: 1,
+        }
+    }
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+    fn push(&mut self, node: UITreeNode<T>) {
+        self.next = self.next.checked_add(1).expect("Node ID space exhausted");
+        self.entries.insert(node.index, node);
+    }
+}
+impl<T> std::ops::Index<usize> for NodeStorage<T> {
+    type Output = UITreeNode<T>;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.entries[&index]
+    }
+}
+impl<T> std::ops::IndexMut<usize> for NodeStorage<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.entries.get_mut(&index).expect("Invalid node ID")
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TreeMapError {
     #[error("Cannot remove root or invalid index {0} (tree has {1} nodes)")]
@@ -52,7 +85,7 @@ impl<T: Default> UITreeNode<T> {
 
 #[derive(Debug, Clone)]
 pub struct UITreeMap<T> {
-    nodes: Vec<UITreeNode<T>>,
+    nodes: NodeStorage<T>,
     name_to_index: UIHashMap<String, Vec<usize>>, // Name-to-indices map (names are not unique)
     rtid_to_index: UIHashMap<String, usize>,
 }
@@ -76,7 +109,7 @@ impl<T> UITreeMap<T> {
         rtid_to_index.insert(rt_id, 0);
 
         Self {
-            nodes: vec![root],
+            nodes: NodeStorage::new(root),
             name_to_index,
             rtid_to_index,
         }
@@ -98,20 +131,33 @@ impl<T> UITreeMap<T> {
         &mut self.nodes[index]
     }
 
+    pub(crate) fn rebuild_names(&mut self) {
+        self.name_to_index.clear();
+        for node in self.nodes.entries.values() {
+            self.name_to_index
+                .entry(node.name.clone())
+                .or_default()
+                .push(node.index);
+        }
+        for indices in self.name_to_index.values_mut() {
+            indices.sort_unstable();
+        }
+    }
+
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
 
     pub fn has_node(&self, index: usize) -> bool {
-        index < self.nodes.len() && self.nodes[index].is_alive
+        self.nodes.entries.contains_key(&index)
     }
 
-    pub fn nodes(&self) -> &[UITreeNode<T>] {
-        &self.nodes
+    pub fn nodes(&self) -> impl Iterator<Item = &UITreeNode<T>> {
+        self.nodes.entries.values()
     }
 
     pub fn add_child(&mut self, parent: usize, name: &str, rt_id: &str, data: T) -> usize {
-        let index = self.nodes.len();
+        let index = self.nodes.next;
         let node = UITreeNode {
             name: name.to_string(),
             runtime_id: rt_id.to_string(),
@@ -136,7 +182,7 @@ impl<T> UITreeMap<T> {
     where
         T: Default,
     {
-        if index == 0 || index >= self.nodes.len() {
+        if index == 0 || !self.has_node(index) {
             log::warn!(
                 "Attempting to remove index: {} on TreeMap with {} nodes",
                 index,
@@ -176,9 +222,8 @@ impl<T> UITreeMap<T> {
         // Remove all children references
         self.nodes[index].children.clear();
 
-        // We leave the node in the vector to keep indices stable
-        // but we replace it with an emptpy placeholder
-        self.nodes[index] = UITreeNode::new(T::default());
+        // Reclaim storage; the monotonic ID is never assigned again.
+        self.nodes.entries.remove(&index);
 
         Ok(())
     }
@@ -265,7 +310,7 @@ impl<T> UITreeMap<T> {
             return;
         }
         let prefix = " ".repeat(indent);
-        println!("{}{}: {}", prefix, &node.name, display(&node.data));
+        println!("{}{}: {}", prefix, node.name, display(&node.data));
 
         for &child in &node.children {
             self.debug_tree_map(child, indent + 2, display, depth + 1);

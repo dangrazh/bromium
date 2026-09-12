@@ -1,4 +1,8 @@
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use win_event_hook::WinEventHook;
 pub use win_event_hook::events::{Event, NamedEvent};
@@ -10,7 +14,7 @@ use windows::Win32::Foundation::HWND;
 pub struct WinEventMonitor {
     hook: WinEventHook,
     rx_channel: Receiver<WinEventInfo>,
-    mouse_hwnd: HWND,
+    overflow: Arc<AtomicBool>,
 }
 
 impl Default for WinEventMonitor {
@@ -21,27 +25,29 @@ impl Default for WinEventMonitor {
 
 impl WinEventMonitor {
     pub fn new() -> Self {
-        let mouse_hwnd: HWND = HWND::default();
-        let (hook, rx) =
+        let (hook, rx, overflow) =
             create_hook().expect("Failed to install WinEvent hook — is the event loop running?");
 
         WinEventMonitor {
             hook,
             rx_channel: rx,
-            mouse_hwnd,
+            overflow,
         }
     }
 
     /// Create a new `WinEventMonitor`, returning an error if hook installation fails.
     pub fn try_new() -> Result<Self, win_event_hook::errors::Error> {
-        let mouse_hwnd: HWND = HWND::default();
-        let (hook, rx) = create_hook()?;
+        let (hook, rx, overflow) = create_hook()?;
 
         Ok(WinEventMonitor {
             hook,
             rx_channel: rx,
-            mouse_hwnd,
+            overflow,
         })
+    }
+
+    pub fn take_overflow(&self) -> bool {
+        self.overflow.swap(false, Ordering::AcqRel)
     }
 
     pub fn check_for_events(&mut self) -> Vec<WinEvtMonitorEvent> {
@@ -54,10 +60,14 @@ impl WinEventMonitor {
 
         for event_info in rx_iter {
             let hwnd = *event_info.hwnd;
-            if hwnd.0 != self.mouse_hwnd.0 {
+            if !hwnd.is_invalid() {
                 output.push(WinEvtMonitorEvent {
                     event: event_info.event,
                     hwnd,
+                    object_id: event_info.object_id,
+                    child_id: event_info.child_id,
+                    thread_id: event_info.thread_id,
+                    timestamp: event_info.timestamp,
                 });
             }
         }
@@ -77,6 +87,10 @@ impl Drop for WinEventMonitor {
 pub struct WinEvtMonitorEvent {
     event: Event,
     hwnd: HWND,
+    pub object_id: i32,
+    pub child_id: i32,
+    pub thread_id: u32,
+    pub timestamp: u32,
 }
 
 impl WinEvtMonitorEvent {
@@ -93,25 +107,40 @@ impl WinEvtMonitorEvent {
 struct WinEventInfo {
     event: Event,
     hwnd: OpaqueHandle<WindowHandle>,
+    object_id: i32,
+    child_id: i32,
+    thread_id: u32,
+    timestamp: u32,
 }
 
 fn create_event_handler(
-    tx: Sender<WinEventInfo>,
+    tx: SyncSender<WinEventInfo>,
+    overflow: Arc<AtomicBool>,
 ) -> impl Fn(Event, OpaqueHandle<WindowHandle>, i32, i32, u32, u32) {
-    move |ev, ohwnd: OpaqueHandle<WindowHandle>, _, _, _, _| {
+    move |ev, ohwnd: OpaqueHandle<WindowHandle>, object_id, child_id, thread_id, timestamp| {
         // log::debug!("Event received: {:?} on hwnd: {:?}", ev, ohwnd);
-        tx.send(WinEventInfo {
-            event: ev,
-            hwnd: ohwnd,
-        })
-        .unwrap_or_else(|e| eprintln!("Failed to send event: {}", e));
+        if tx
+            .try_send(WinEventInfo {
+                event: ev,
+                hwnd: ohwnd,
+                object_id,
+                child_id,
+                thread_id,
+                timestamp,
+            })
+            .is_err()
+        {
+            overflow.store(true, Ordering::Release);
+        }
         // log::debug!("Event sent to channel");
     }
 }
 
-fn create_hook() -> Result<(WinEventHook, Receiver<WinEventInfo>), win_event_hook::errors::Error> {
+fn create_hook()
+-> Result<(WinEventHook, Receiver<WinEventInfo>, Arc<AtomicBool>), win_event_hook::errors::Error> {
     // Create channel for communication
-    let (tx, rx): (Sender<WinEventInfo>, Receiver<WinEventInfo>) = channel();
+    let (tx, rx) = sync_channel(1024);
+    let overflow = Arc::new(AtomicBool::new(false));
 
     // Create hook config
     let config = win_event_hook::Config::builder()
@@ -121,6 +150,10 @@ fn create_hook() -> Result<(WinEventHook, Receiver<WinEventInfo>), win_event_hoo
             // A hidden object is shown. The system sends this event for the following user interface elements: caret, cursor, and window object. Server applications send this event for their accessible objects.
             // Clients assume that when this event is sent by a parent object, all child objects are already displayed. Therefore, server applications do not send this event for the child objects.
             // Hidden objects include the STATE_SYSTEM_INVISIBLE flag; shown objects do not include this flag. The EVENT_OBJECT_SHOW event also indicates that the STATE_SYSTEM_INVISIBLE flag is cleared. Therefore, servers do not send the EVENT_STATE_CHANGE event in this case.
+            Event::Named(NamedEvent::ObjectNameChange),
+            Event::Named(NamedEvent::ObjectValueChange),
+            Event::Named(NamedEvent::ObjectReorder),
+            Event::Named(NamedEvent::SystemForeground),
             Event::Named(NamedEvent::ObjectShow),
             // An object is hidden. The system sends this event for the following user interface elements: caret and cursor. Server applications send this event for their accessible objects.
             // When this event is generated for a parent object, all child objects are already hidden. Server applications do not send this event for the child objects.
@@ -148,7 +181,7 @@ fn create_hook() -> Result<(WinEventHook, Receiver<WinEventInfo>), win_event_hoo
 
     // Create handler and install hook
     log::info!("Installing hook");
-    let handler = create_event_handler(tx);
+    let handler = create_event_handler(tx, Arc::clone(&overflow));
     let hook = win_event_hook::WinEventHook::install(config, handler)?;
-    Ok((hook, rx))
+    Ok((hook, rx, overflow))
 }

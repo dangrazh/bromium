@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 $WorkspaceRoot = 'C:\LocalData\Rust\bromium-ws-new'
 $CrateDir      = Join-Path $WorkspaceRoot 'crates\bromium'
 $CargoToml     = Join-Path $CrateDir 'Cargo.toml'
-$VenvActivate  = Join-Path $CrateDir '.pyo3venv\Scripts\Activate.ps1'
+$VenvActivate  = Join-Path $CrateDir '.py03venv312\Scripts\Activate.ps1'
 
 # --- Validate arguments ---
 if ($Patch -and $Minor) {

@@ -1,4 +1,5 @@
-from bromium import Bromium, WinDriver
+import bromium
+from bromium import WinDriver
 import time
 import os
 
@@ -7,8 +8,9 @@ def demo_app_launch():
     
     #initialize Bromium logging
     print("Initializing Bromium logging...")
-    Bromium.init_logging(log_path=None, log_level="Info", enable_console=True, enable_file=True)
-    
+    # Bromium.init_logging(log_path=None, log_level="Info", enable_console=True, enable_file=True)
+    bromium.init_logging(log_path=None, log_level="Info", enable_console=True, enable_file=True)
+
     # Create a WinDriver instance
     print("Getting WinDriver Instance...")
     driver = WinDriver(timeout_ms=5, window_title=None)
@@ -52,6 +54,7 @@ def demo_app_launch():
         xpath_search = r"/Pane[@Name='Desktop 1']/Window[contains(@Name, 'Microsoft Teams')]//ComboBox[@Name='Suche']"
         try:
             search_field = driver.get_element_by_xpath(xpath_search, None)
+
             # if this does not raise an exception, the button was found, hence we need to login
             print("Search field found...")
             # Bromium.set_log_level("Trace")
