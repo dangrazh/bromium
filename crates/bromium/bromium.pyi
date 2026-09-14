@@ -187,6 +187,22 @@ class Element:
 
     # ─── Actions ──────────────────────────────────────────────────────────
 
+    def close(self) -> None:
+        """Request closure through this live element's UIA Window pattern.
+
+        Capability is checked at invocation, not inferred from control_type.
+        Never closes an ancestor or falls back to keyboard input/process termination.
+        Returns None when the provider call succeeds, not proof that the window
+        has disappeared; application prompts or refusal may require user action.
+        Driver-attached elements invalidate affected coverage automatically.
+        Releases the GIL, but like other actions has no enforced execution timeout.
+
+        Raises:
+            ElementNotFoundError: Live identity cannot be resolved or was replaced.
+            AutomationError: Window pattern unsupported, or provider lookup/closure failed.
+        """
+        ...
+
     def send_click(self) -> None:
         """
         Send a click to the element.

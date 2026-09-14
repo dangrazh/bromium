@@ -3,7 +3,8 @@
 Bromium provides Windows desktop UI automation through Rust and Python.
 
 - **Python library:** query UI Automation elements, launch or activate applications,
-  perform mouse/keyboard actions, inspect displays, and capture the primary screen.
+  request supported window closure, perform mouse/keyboard actions, inspect
+  displays, and capture the primary screen.
 - **UI Explore:** inspect the desktop's cached UI tree, obtain XPath locators, and
   test queries in a desktop application.
 
@@ -62,6 +63,15 @@ no enforced execution timeout. Serialize calls on a shared Python driver with
 a lock. A permanently blocked provider can consume its capture worker and leave
 later queries stale; a query deadline does not cancel an already-running COM call.
 
+`app_window.close()` requests normal closure through the live element's UIA
+Window pattern. Unsupported elements raise `AutomationError`; unresolved or
+obsolete identities raise `ElementNotFoundError`. It never closes an ancestor,
+sends a keyboard shortcut, or terminates a process. Successful return means the
+provider call succeeded, not that the window has already disappeared. Closing
+a driver-returned element triggers automatic coverage and membership repair;
+no manual refresh is needed. See the [closure API](crates/bromium/README.md#closing-a-window)
+for details and an example.
+
 ## Build from this workspace
 
 Use a Windows Rust toolchain with the MSVC build tools/Windows SDK and a matching
@@ -93,11 +103,11 @@ subject to Windows session, privilege, and provider restrictions.
 ## Validation and release status
 
 See [Python regression test instructions](crates/bromium/tests/README_INCREMENTAL.md)
-and the [follow-up completion record](PYTHON_LIBRARY_FOLLOWUP_TASKS.md).
+and the [follow-up completion record](bromium_docs_for_agents/done/PYTHON_LIBRARY_FOLLOWUP_TASKS.md).
 Desktop tests are opt-in; Teams interaction requires a separate opt-in.
 Local correctness tests passed, but representative slow-target performance
 acceptance remains outstanding. See the
-[implementation status](TREE_INCREMENTAL_IMPLEMENTATION_STATUS.md) for limits.
+[implementation status](bromium_docs_for_agents/done/TREE_INCREMENTAL_IMPLEMENTATION_STATUS.md) for limits.
 
 Do not use `ci.ps1` for ordinary local validation: it includes release/version
 and publication operations.

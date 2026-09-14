@@ -167,6 +167,16 @@ impl TreeService {
     pub fn cached_view(&self, title: Option<&str>) -> UITree {
         self.shared.state.lock().unwrap().tree.view(title)
     }
+    /// Reconcile possible removal after an action such as Close. For top-level
+    /// windows this is shallow desktop membership, never desktop descendants.
+    pub fn invalidate_parent_membership(&self, id: &[i32]) {
+        let mut s = self.shared.state.lock().unwrap();
+        if let Some(index) = s.tree.index_for_id(id) {
+            let parent = s.tree.get_tree().node(index).parent;
+            mark(&mut s, parent, CaptureKind::Children);
+            self.shared.changed.notify_all();
+        }
+    }
     pub fn set_capture_timeout(&self, timeout: Duration) {
         self.shared.state.lock().unwrap().capture_timeout = timeout;
     }
@@ -933,6 +943,52 @@ mod tests {
         );
         service.ensure(None, Instant::now()).unwrap();
         assert!(calls.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn closure_reconciles_only_parent_membership() {
+        type ParentCapture = (CaptureKind, Vec<i32>);
+        struct RecordParent(Arc<Mutex<Vec<ParentCapture>>>);
+        impl Capture for RecordParent {
+            fn capture(
+                &mut self,
+                request: &CaptureRequest,
+                _: &AtomicBool,
+            ) -> Result<Observation, String> {
+                let properties = request
+                    .target
+                    .clone()
+                    .unwrap_or_else(|| SaveUIElement::fixture(1, "Desktop", "Pane"));
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((request.kind, properties.get_runtime_id().to_vec()));
+                Ok(Observation {
+                    properties,
+                    children: Some(vec![]),
+                })
+            }
+        }
+        for (target, parent_id) in [(2, 1), (3, 2)] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let captured = calls.clone();
+            let service = TreeService::with_capture(
+                UITree::from_observation(obs(
+                    1,
+                    Some(vec![obs(2, Some(vec![obs(3, Some(vec![]))]))]),
+                ))
+                .unwrap(),
+                move || RecordParent(captured),
+            );
+            service.invalidate_parent_membership(&[42, target]);
+            service
+                .ensure(Some("App"), Instant::now() + Duration::from_secs(2))
+                .unwrap();
+            assert_eq!(
+                *calls.lock().unwrap(),
+                vec![(CaptureKind::Children, vec![42, parent_id])]
+            );
+            assert!(service.snapshot().index_for_id(&[42, target]).is_none());
+        }
     }
     #[test]
     fn obsolete_action_token_rejects_reused_runtime_id_without_provider_calls() {

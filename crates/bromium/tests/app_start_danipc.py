@@ -13,7 +13,7 @@ def demo_app_launch():
 
     # Create a WinDriver instance
     print("Getting WinDriver Instance...")
-    driver = WinDriver(timeout_ms=5, window_title=None)
+    driver = WinDriver(timeout_ms=5000, window_title=None)
     print("WinDriver instance obtained.")
     no_of_elements = driver.element_count
     print(f"Driver has {no_of_elements} elements.")
@@ -42,9 +42,9 @@ def demo_app_launch():
         time.sleep(3)
         
         # Reload the driver to ensure we have the latest UI tree
-        driver.refresh(None)
+        # driver.refresh(None)
         no_of_elements = driver.element_count
-        print(f"Driver reloaded to refresh UI tree. It now has {no_of_elements} elements.")
+        print(f"UI tree now has {no_of_elements} elements.")
  
         # Increase logging level to Trace for detailed output
         # print("Setting Bromium log level to Trace for detailed output...")
@@ -68,6 +68,8 @@ def demo_app_launch():
                 print("First User ListItem  found...")
                 username_field.send_click()
                 print("Successfully clicked")
+                app_window.close()
+                print("Teams window closed after user selection.")
             except Exception as e:
                 print(f"First ListItem not found, aborting user selection. got error: {e}")
         except Exception as e:

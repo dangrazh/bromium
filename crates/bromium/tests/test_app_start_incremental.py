@@ -252,7 +252,7 @@ def main():
         os.environ["BROMIUM_LIVE_TESTS"] = "1"
     suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
     if args.live:
-        for module in ("test_launch_contract", "test_action_contract", "test_incremental_live"):
+        for module in ("test_launch_contract", "test_action_contract", "test_incremental_live", "test_close_contract"):
             suite.addTests(unittest.defaultTestLoader.loadTestsFromName(module))
     result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1

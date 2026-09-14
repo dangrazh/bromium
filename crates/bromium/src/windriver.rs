@@ -9,8 +9,8 @@ use crate::exceptions::{
 };
 use crate::screen_context::ScreenContext;
 use crate::uiauto::{
-    get_ui_element_by_runtimeid, invoke_click, select_item, set_value, supports_invoke,
-    supports_select, supports_value,
+    close_window, get_ui_element_by_runtimeid, invoke_click, select_item, set_value,
+    supports_invoke, supports_select, supports_value,
 };
 use uitree::{SaveUIElementXML, TreeService, UITreeXML};
 
@@ -246,6 +246,21 @@ impl Element {
     }
 
     // ─── Mouse methods ──────────────────────────────────────────────────
+
+    /// Request closure of this live element through its Window pattern.
+    /// Does not close ancestors, terminate processes, or wait for disappearance.
+    /// Unsupported patterns/provider errors raise AutomationError; obsolete
+    /// identities raise ElementNotFoundError. Like other actions, releases the
+    /// GIL but has no enforced execution deadline.
+    pub fn close(&self, py: Python<'_>) -> PyResult<()> {
+        let result = with_ui_element(py, self, "close", close_window);
+        // The target can disappear during Close. Reconcile its parent's immediate
+        // children as well as normal action coverage, without waiting for events.
+        if let Some(service) = &self.service {
+            service.invalidate_parent_membership(&self.runtime_id);
+        }
+        result
+    }
 
     pub fn send_click(&self, py: Python<'_>) -> PyResult<()> {
         with_ui_element(py, self, "click", |e| {

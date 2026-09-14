@@ -40,6 +40,11 @@ class ApiContractTests(unittest.TestCase):
         self.assertTrue(issubclass(bromium.StaleTreeError, TimeoutError))
         self.assertTrue(issubclass(bromium.TreeConstructionError, TimeoutError))
 
+    def test_close_rejects_empty_identity(self):
+        element = bromium.Element("", "", 0, "Window", [], (0, 0, 0, 0))
+        with self.assertRaisesRegex(bromium.ElementNotFoundError, "Empty runtime ID"):
+            element.close()  # rejects before any COM/provider access
+
     def test_readme_python_examples_compile(self):
         root = Path(__file__).resolve().parents[3]
         for path in (root / "README.md", root / "crates/bromium/README.md"):

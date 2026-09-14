@@ -7,6 +7,7 @@ The workspace also includes UI Explore, a desktop tree inspector and XPath tool.
 
 - Query a cached UI tree with on-demand, incremental coverage repair
 - Launch an application or activate a matching element in an existing window
+- Request normal closure of an element supporting the UIA Window pattern
 - Interact with UI elements on the current desktop
 - Get screen context information (size, scaling, etc.)
 - Capture the primary monitor to a PNG file
@@ -191,6 +192,41 @@ buttons = driver.find_elements(control_type="Button")
 edits = driver.find_elements(control_type="Edit", name="Search")
 ```
 
+### Closing a window
+
+`Element.close() -> None` checks the resolved live element's **Window pattern**,
+not just its cached control type. It requests closure of that element only;
+there is no automatic ancestor selection, Alt+F4 fallback, or process termination.
+`launch_or_activate_app()` can return a descendant if its XPath selects one, so
+use a locator for the actual window when you intend to close it.
+
+```python
+import bromium
+
+driver = bromium.WinDriver(timeout_ms=5000, window_title="My test application")
+window = driver.get_element_by_xpath("//Window[contains(@Name,'My test application')]")
+try:
+    window.close()  # Only use this on a window you intend to close.
+except bromium.ElementNotFoundError as error:
+    print(f"Window identity no longer available: {error}")
+except bromium.AutomationError as error:
+    print(f"Closure unsupported or provider failed: {error}")
+```
+
+Unsupported elements raise `AutomationError` with a Window-pattern diagnostic.
+Provider lookup and close failures preserve their error details. Identity
+resolution rejects removed/replaced targets with `ElementNotFoundError`.
+A successful return does not guarantee that the window has disappeared or that
+its process has exited; the application may display a prompt or handle the
+request without exiting. This operation does not answer prompts or force closure.
+
+For driver-created elements, affected coverage and the parent's immediate
+membership are invalidated automatically. Subsequent queries repair them without
+a manual refresh. The old Python object's properties remain snapshots. Manually
+constructed elements retain the same compatibility limitations as other actions.
+Like other actions, `close()` releases the GIL but has no enforced execution
+timeout; `driver.timeout_ms` does not interrupt an already-running close call.
+
 ## API Reference
 
 ### Module-level Functions
@@ -281,6 +317,7 @@ permanent identifiers across removal/replacement.
 
 #### Methods
 
+- `close() -> None`: Requests closure using the live Window pattern. Unsupported capability/provider failures raise `AutomationError`; unresolved/obsolete identity raises `ElementNotFoundError`. See [Closing a window](#closing-a-window).
 - `send_click() -> None`: Uses Invoke, else SelectionItem, else a mouse click at the live center. A failed supported pattern raises rather than trying another action.
 - `send_double_click() -> None`: Sends a double-click at the element center.
 - `send_right_click() -> None`: Sends a right-click at the element center.

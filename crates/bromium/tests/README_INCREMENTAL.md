@@ -31,8 +31,8 @@ or after 60 seconds; stdin-controlled fixtures are stopped in `finally` blocks.
 Only test-owned child processes are eligible for termination. Existing windows
 and user applications are never closed.
 
-This command also runs `test_launch_contract.py`, `test_action_contract.py`, and
-`test_incremental_live.py`. They remain independently runnable using
+This command also runs `test_launch_contract.py`, `test_action_contract.py`,
+`test_incremental_live.py`, and `test_close_contract.py`. They remain independently runnable using
 `BROMIUM_LIVE_TESTS=1`. The suite covers:
 
 - Absent launch, descendant-based activation, and no duplicate launch.
@@ -44,6 +44,9 @@ This command also runs `test_launch_contract.py`, `test_action_contract.py`, and
   driver rejects overlapping mutable calls with `RuntimeError`; use a Python
   lock to serialize them. Separate driver instances have separate tree services.
 - Repeated fixture/driver teardown to exercise callback subscription ownership.
+- Window-pattern closure, unsupported and obsolete target errors, unchanged
+  sibling windows/process lifetime, automatic membership repair, and GIL release
+  while closing a delayed fixture. Closure tests never interact with Teams.
 
 Deterministic provider failure, shared Rust-service repair, reused runtime IDs,
 and deadline/late-worker behavior are tested below the Python boundary:
@@ -87,3 +90,25 @@ Local fixture results establish correctness on the tested desktop, not capture
 latency acceptance for representative slow target systems. Record those timings
 separately. A provider that is already blocked may outlive a caller's deadline;
 the tests do not claim that it can be forcibly cancelled.
+
+## Close-method validation — 2026-09-14
+
+Validated with the rebuilt local CPython 3.12 Windows x64 development wheel:
+
+- `test_api_contract.py`: 6 passed, including `Element.close()` signature and
+  rejection of an empty identity before provider access.
+- `test_app_start_incremental.py --live`: 10 passed, Teams explicitly skipped.
+  The two close tests cover actual window closure, automatic membership repair,
+  Python thread progress during a provider wait, unsupported controls, obsolete
+  targets, and preservation of sibling windows/the fixture process.
+- `cargo test --workspace --locked --target-dir target/close-tests --quiet`:
+  96 passed, 2 existing screenshot tests ignored. A fresh target directory was
+  used after the linker could not open old test executables in `followup-tests`.
+- Strict Clippy on `bromium`/`uitree`, changed-file Rust formatting, and
+  `git diff --check`: passed.
+
+The absent-pattern regression also covers the pinned Windows binding's null
+interface result (error code zero), so unsupported closure reports a clear
+capability error rather than the misleading system text "operation completed
+successfully". No Teams windows or user applications were closed. No version
+bump or publication workflow was run.
