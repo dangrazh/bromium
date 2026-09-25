@@ -99,5 +99,8 @@ docs/_build/
 # tokensave
 .tokensave/
 
+# slow system logs and dumps
+slow_system/
+
 # Workspace-member lock files (root Cargo.lock is authoritative)
 crates/*/Cargo.lock

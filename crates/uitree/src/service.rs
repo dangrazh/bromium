@@ -31,12 +31,12 @@ struct Dirty {
     epoch: u64,
     retry_at: Instant,
     queued_at: Instant,
+    error: Option<String>,
 }
 struct State {
     tree: UITree,
     dirty: HashMap<usize, Dirty>,
     epoch: u64,
-    error: Option<String>,
     membership_at: Instant,
     capture_timeout: Duration,
     interest: HashMap<usize, Instant>,
@@ -98,7 +98,6 @@ impl TreeService {
                 tree,
                 dirty: HashMap::new(),
                 epoch: 0,
-                error: None,
                 membership_at: Instant::now(),
                 capture_timeout: Duration::from_secs(120),
                 interest: HashMap::new(),
@@ -204,10 +203,14 @@ impl TreeService {
                     .coverage(e.get_tree_index())
                     .is_some_and(|c| c.children_observed))
                 .count(),
-            s.error
-                .as_ref()
-                .map(|e| format!(" error={e}"))
-                .unwrap_or_default()
+            {
+                let errors = region_errors(&s, |_, _| true);
+                if errors.is_empty() {
+                    String::new()
+                } else {
+                    format!(" error={}", errors.join("; "))
+                }
+            }
         )
     }
     pub fn invalidate(&self, index: usize, kind: CaptureKind) {
@@ -366,10 +369,23 @@ impl TreeService {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(StaleTree {
-                    reason: s
-                        .error
-                        .clone()
-                        .unwrap_or_else(|| "query deadline expired".into()),
+                    reason: {
+                        let errors = region_errors(&s, |id, d| {
+                            id == 0
+                                || s.tree.get_tree().node(id).parent == 0
+                                    && d.kind == CaptureKind::Properties
+                                || descendants
+                                    && roots.iter().any(|&root| {
+                                        s.tree.is_descendant(id, root)
+                                            || s.tree.is_descendant(root, id)
+                                    })
+                        });
+                        if errors.is_empty() {
+                            "query deadline expired".into()
+                        } else {
+                            format!("query deadline expired; {}", errors.join("; "))
+                        }
+                    },
                     scope: title.map(str::to_owned),
                     revision: s.tree.revision(),
                     coverage: "dirty or unobserved".into(),
@@ -505,6 +521,7 @@ fn mark(s: &mut State, index: usize, kind: CaptureKind) {
         .dirty
         .get(&index)
         .map_or(queued_at + Duration::from_millis(20), |d| d.retry_at);
+    let error = s.dirty.get(&index).and_then(|d| d.error.clone());
     s.dirty.insert(
         index,
         Dirty {
@@ -512,8 +529,22 @@ fn mark(s: &mut State, index: usize, kind: CaptureKind) {
             epoch: s.epoch,
             retry_at,
             queued_at,
+            error,
         },
     );
+}
+fn region_errors(s: &State, relevant: impl Fn(usize, &Dirty) -> bool) -> Vec<String> {
+    let mut errors: Vec<_> = s
+        .dirty
+        .iter()
+        .filter(|(id, d)| s.tree.get_tree().has_node(**id) && relevant(**id, d))
+        .filter_map(|(&id, d)| d.error.as_ref().map(|error| (id, error)))
+        .collect();
+    errors.sort_by_key(|(id, _)| *id);
+    errors
+        .into_iter()
+        .map(|(id, error)| format!("target={id}: {error}"))
+        .collect()
 }
 fn request(s: &State, target: usize, kind: CaptureKind) -> CaptureRequest {
     let window = s.tree.owning_window(target);
@@ -595,6 +626,7 @@ fn run<C: Capture>(shared: Arc<Shared>, mut capture: C) {
             capture.capture(&request, &shared.stop)
         }))
         .unwrap_or_else(|_| Err("Capture worker panicked; coverage retained for retry".into()));
+        let phase = if result.is_ok() { "commit" } else { "capture" };
         let mut s = shared.state.lock().unwrap();
         let result = result.and_then(|observation| s.tree.commit(id, observation));
         match result {
@@ -616,11 +648,22 @@ fn run<C: Capture>(shared: Arc<Shared>, mut capture: C) {
                 if id == 0 {
                     s.membership_at = Instant::now();
                 }
-                s.error = None;
             }
             Err(error) => {
-                s.error = Some(error);
+                log::debug!(
+                    "tree_repair_failed phase={} target={} kind={:?} runtime_id={:?} name={:?} control_type={:?} window_handle={} revision={} error={:?}",
+                    phase,
+                    id,
+                    request.kind,
+                    request.target.as_ref().map(|p| p.get_runtime_id()),
+                    request.target.as_ref().map(|p| p.get_name()),
+                    request.target.as_ref().map(|p| p.get_control_type()),
+                    request.window_handle,
+                    s.tree.revision(),
+                    error
+                );
                 if let Some(d) = s.dirty.get_mut(&id) {
+                    d.error = Some(format!("{phase}: {error}"));
                     d.retry_at = Instant::now() + Duration::from_secs(1);
                 }
                 // A vanished target needs its parent's membership checked, never a global subtree walk.
@@ -1268,6 +1311,80 @@ mod tests {
         assert_eq!(error.revision, revision);
         assert_eq!(service.snapshot().revision(), revision);
         assert!(error.reason.contains("provider unavailable"));
+    }
+
+    #[test]
+    fn rejected_commit_error_survives_parent_repair_until_region_recovers() {
+        struct RejectUntilFixed(Arc<AtomicBool>);
+        impl Capture for RejectUntilFixed {
+            fn capture(
+                &mut self,
+                r: &CaptureRequest,
+                _: &AtomicBool,
+            ) -> Result<Observation, String> {
+                let id = r.target.as_ref().unwrap().get_runtime_id()[1];
+                Ok(if id == 1 {
+                    obs(1, Some(vec![obs(2, None), obs(3, None)]))
+                } else if id == 2 && !self.0.load(Ordering::SeqCst) {
+                    obs(2, Some(vec![obs(4, None), obs(4, None)]))
+                } else {
+                    obs(id, Some(vec![]))
+                })
+            }
+        }
+        let fixed = Arc::new(AtomicBool::new(false));
+        let capture_fixed = fixed.clone();
+        let service = TreeService::with_capture(
+            UITree::from_observation(obs(
+                1,
+                Some(vec![obs(2, Some(vec![])), obs(3, Some(vec![]))]),
+            ))
+            .unwrap(),
+            move || RejectUntilFixed(capture_fixed),
+        );
+        let target = service.snapshot().index_for_id(&[42, 2]).unwrap();
+        let revision = service.snapshot().revision();
+        service.invalidate(target, CaptureKind::Subtree);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        {
+            let mut state = service.shared.state.lock().unwrap();
+            while state.tree.revision() == revision || state.dirty.contains_key(&0) {
+                assert!(Instant::now() < deadline, "parent repair did not complete");
+                state = service
+                    .shared
+                    .changed
+                    .wait_timeout(state, deadline.saturating_duration_since(Instant::now()))
+                    .unwrap()
+                    .0;
+            }
+            assert!(
+                state.dirty[&target]
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .contains("duplicate")
+            );
+            mark(&mut state, target, CaptureKind::Subtree);
+            assert!(
+                state.dirty[&target].error.is_some(),
+                "invalidation must preserve the error"
+            );
+            assert!(region_errors(&state, |id, _| id != target).is_empty());
+        }
+        let error = service.ensure(None, Instant::now()).unwrap_err();
+        assert!(error.reason.contains("duplicate"));
+        assert!(error.reason.contains(&format!("target={target}")));
+        fixed.store(true, Ordering::SeqCst);
+        {
+            let mut state = service.shared.state.lock().unwrap();
+            state.dirty.get_mut(&target).unwrap().retry_at = Instant::now();
+        }
+        service.shared.changed.notify_all();
+        service
+            .ensure(None, Instant::now() + Duration::from_secs(3))
+            .unwrap();
+        let state = service.shared.state.lock().unwrap();
+        assert!(region_errors(&state, |_, _| true).is_empty());
     }
 
     #[test]

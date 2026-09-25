@@ -359,7 +359,7 @@ class WinDriver:
 
     @property
     def tree_status(self) -> str:
-        """Requested scope plus service-wide revision, dirty/unobserved counts and last error.
+        """Requested scope plus service-wide revision, dirty/unobserved counts and errors per dirty region.
 
         Counts describe the whole cache, not just the configured title scope.
         """

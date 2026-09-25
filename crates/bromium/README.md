@@ -241,6 +241,15 @@ timeout; `driver.timeout_ms` does not interrupt an already-running close call.
 
 These are the recommended entry points for logging configuration:
 
+WinDriver construction logs the received parameters and effective timeouts at
+Info level. Library-raised `StaleTreeError`, `ElementNotFoundError`,
+`AutomationError`, and `TreeConstructionError` log their details at Error level.
+Enable Debug logging to diagnose repair failures: each rejected commit records
+its target identity, capture kind, revision, and rejection reason. The latest
+failure is retained per dirty region until recovery or removal; unrelated
+successful repairs do not erase it. Deadline errors include retained failures
+relevant to the query, and `tree_status` includes outstanding region errors.
+
 - `init_logging(log_path=None, log_level=None, enable_console=None, enable_file=None) -> None`: Initialize logging. `log_path` is a directory; defaults are `%USERPROFILE%/.bromium`, Info, console off, file on. Initialization opens a log file even if file output is disabled.
 - `get_version() -> str`: Returns the current bromium version string.
 - `get_log_file() -> str`: Returns the current log file path, opening a default file if needed; returns an empty string if that fails.
@@ -277,7 +286,7 @@ The main class for interacting with the Windows UI Automation tree.
 |----------|------|--------|-------------|
 | `timeout_ms` | `int` | read/write | Default timeout in milliseconds for element lookup retries |
 | `tree_timeout_secs` | `int` | read/write | Manual refresh and subsequent provider-job budget, default 120 seconds |
-| `tree_status` | `str` | read-only | Scope and service-wide revision, dirty/unobserved counts, last error if any |
+| `tree_status` | `str` | read-only | Scope and service-wide revision, dirty/unobserved counts, retained errors per dirty region |
 | `element_count` | `int` | read-only | Cached count in scope; may be incomplete or stale |
 | `window_title` | `Optional[str]` | read/write | The window title filter, if set |
 

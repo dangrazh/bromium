@@ -361,9 +361,9 @@ where
             element.runtime_id
         );
         if resolution {
-            ElementNotFoundError::new_err(message)
+            ElementNotFoundError::logged_err(message)
         } else {
-            AutomationError::new_err(message)
+            AutomationError::logged_err(message)
         }
     })
 }
@@ -514,12 +514,19 @@ impl WinDriver {
         timeout_ms: Option<u64>,
         window_title: Option<String>,
     ) -> PyResult<Self> {
+        log::info!(
+            "WinDriver::new timeout_ms={:?} window_title={:?} effective_timeout_ms={} initialization_timeout_secs={}",
+            timeout_ms,
+            window_title,
+            timeout_ms.unwrap_or(120000),
+            DEFAULT_TREE_TIMEOUT_SECS
+        );
         let service = TreeService::new();
         let ui_tree = py
             .allow_threads(|| {
                 service.membership(Instant::now() + Duration::from_secs(DEFAULT_TREE_TIMEOUT_SECS))
             })
-            .map_err(|e| TreeConstructionError::new_err(e.to_string()))?;
+            .map_err(|e| TreeConstructionError::logged_err(e.to_string()))?;
         Ok(Self {
             timeout_ms: timeout_ms.unwrap_or(120000),
             tree_timeout_secs: DEFAULT_TREE_TIMEOUT_SECS,
@@ -686,7 +693,7 @@ impl WinDriver {
         // SAFETY: `point` is a valid stack-allocated POINT; GetCursorPos writes into it.
         unsafe {
             GetCursorPos(&mut point)
-                .map_err(|e| AutomationError::new_err(format!("GetCursorPos failed: {}", e)))?;
+                .map_err(|e| AutomationError::logged_err(format!("GetCursorPos failed: {}", e)))?;
         }
         Ok((point.x, point.y))
     }
@@ -707,7 +714,7 @@ impl WinDriver {
         loop {
             self.ui_tree = self.service.snapshot();
             let handle = uitree::window_at_point(x, y)
-                .ok_or_else(|| ElementNotFoundError::new_err("No window at point"))?;
+                .ok_or_else(|| ElementNotFoundError::logged_err("No window at point"))?;
             let mut window = self
                 .ui_tree
                 .children(0)
@@ -726,14 +733,14 @@ impl WinDriver {
                     .find(|&id| self.ui_tree.node(id).1.get_handle() == handle);
             }
             let id = window.ok_or_else(|| {
-                ElementNotFoundError::new_err("Window has no exposed UIA element")
+                ElementNotFoundError::logged_err("Window has no exposed UIA element")
             })?;
             if self
                 .window_title
                 .as_ref()
                 .is_some_and(|title| !self.ui_tree.node(id).1.get_name().contains(title))
             {
-                return Err(ElementNotFoundError::new_err(
+                return Err(ElementNotFoundError::logged_err(
                     "Point is outside the configured window scope",
                 ));
             }
@@ -755,7 +762,7 @@ impl WinDriver {
                 continue;
             }
             let hit = uitree::element_at_point(&self.ui_tree, x, y)
-                .ok_or_else(|| ElementNotFoundError::new_err("No exposed element at point"))?;
+                .ok_or_else(|| ElementNotFoundError::logged_err("No exposed element at point"))?;
             let mut result = Self::element_from_save_ui(hit.get_element_props());
             result.xpath = self
                 .ui_tree
@@ -790,7 +797,7 @@ impl WinDriver {
                 return Ok(self.attach(element));
             }
             if Instant::now() >= deadline {
-                return Err(ElementNotFoundError::new_err(format!(
+                return Err(ElementNotFoundError::logged_err(format!(
                     "Element not found for xpath '{xpath}'"
                 )));
             }
@@ -854,18 +861,18 @@ impl WinDriver {
 
         let monitors = Monitor::all().map_err(|e| {
             error!("Failed to get monitors for screenshot: {}", e);
-            AutomationError::new_err("Failed to enumerate monitors")
+            AutomationError::logged_err("Failed to enumerate monitors")
         })?;
         if monitors.is_empty() {
             error!("No monitors found for screenshot");
-            return Err(AutomationError::new_err("No monitors found"));
+            return Err(AutomationError::logged_err("No monitors found"));
         }
         debug!("Found {} monitors", monitors.len());
 
         let out_dir = std::env::temp_dir().join("bromium_screenshots");
         fs::create_dir_all(&out_dir).map_err(|e| {
             error!("Error creating screenshot directory: {:?}", e);
-            AutomationError::new_err(format!(
+            AutomationError::logged_err(format!(
                 "Failed to create screenshot directory '{}': {}",
                 out_dir.display(),
                 e
@@ -877,10 +884,10 @@ impl WinDriver {
             .into_iter()
             .find(|m| m.is_primary().unwrap_or(false))
         else {
-            return Err(AutomationError::new_err("No primary monitor found"));
+            return Err(AutomationError::logged_err("No primary monitor found"));
         };
         let image = monitor.capture_image().map_err(|e| {
-            AutomationError::new_err(format!("Failed to capture screenshot: {}", e))
+            AutomationError::logged_err(format!("Failed to capture screenshot: {}", e))
         })?;
         let monitor_name = monitor
             .name()
@@ -901,7 +908,7 @@ impl WinDriver {
             }
             Err(e) => {
                 error!("Error saving screenshot: {:?}", e);
-                Err(AutomationError::new_err(format!(
+                Err(AutomationError::logged_err(format!(
                     "Failed to save screenshot to '{}': {}",
                     filenameandpath.display(),
                     e
@@ -957,7 +964,7 @@ impl WinDriver {
             Err(crate::app_control::AppControlError::Deadline(e)) => {
                 Err(pyo3::exceptions::PyTimeoutError::new_err(e))
             }
-            Err(e) => Err(AutomationError::new_err(e.to_string())),
+            Err(e) => Err(AutomationError::logged_err(e.to_string())),
         }
     }
 
@@ -1040,11 +1047,11 @@ impl WinDriver {
         self.ui_tree = tree;
         Ok(())
     }
-    pub fn refresh_ui_tree_top_2(&mut self) -> PyResult<()> {
+    pub fn refresh_ui_tree_top_2(&mut self, py: Python<'_>) -> PyResult<()> {
         self.ui_tree = self
             .service
             .membership(Instant::now() + Duration::from_millis(self.timeout_ms))
-            .map_err(|e| StaleTreeError::new_err(e.to_string()))?;
+            .map_err(|e| stale_error(py, e))?;
         Ok(())
     }
     #[cfg(test)]
@@ -1063,7 +1070,7 @@ impl WinDriver {
 }
 
 fn stale_error(py: Python<'_>, stale: uitree::StaleTree) -> PyErr {
-    let error = StaleTreeError::new_err(stale.to_string());
+    let error = StaleTreeError::logged_err(stale.to_string());
     let value = error.value(py);
     let _ = value.setattr("reason", stale.reason);
     let _ = value.setattr("scope", stale.scope);
