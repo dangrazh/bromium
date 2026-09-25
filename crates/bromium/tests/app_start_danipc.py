@@ -61,13 +61,15 @@ def demo_app_launch():
             search_field.send_text("Test")
             # sometimes Teams takes a bit to process the input
             time.sleep(2)
-            driver.refresh(None)
+            # driver.refresh(None)
             xpath_1st_listitem = r"/Pane[@Name='Desktop 1']/Window[contains(@Name, 'Microsoft Teams')]//Group[@Name='Personen']/ListItem[1]"
             try:
                 username_field = driver.get_element_by_xpath(xpath_1st_listitem, None)
                 print("First User ListItem  found...")
                 username_field.send_click()
                 print("Successfully clicked")
+                # give it a moment to process the click and close the window
+                time.sleep(2)
                 app_window.close()
                 print("Teams window closed after user selection.")
             except Exception as e:

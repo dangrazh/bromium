@@ -5,7 +5,6 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use eframe::egui;
-use egui::Response; // TextBuffer
 // use egui_code_editor::{CodeEditor, ColorTheme, Syntax};
 
 use windows::Win32::Foundation::{POINT, RECT};
@@ -15,12 +14,75 @@ use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use crate::{AppContext, border_window::BorderWindow};
 use uitree::{SaveUIElementXML, UITreeXML};
 
+#[cfg(test)]
+mod tree_render_tests {
+    use super::*;
+
+    #[test]
+    fn actual_root_is_rendered_even_before_first_capture() {
+        let ctx = egui::Context::default();
+        let tree = UITreeXML::empty();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                UIExplorer::render_ui_tree_recursive(ui, &tree, tree.root(), &mut TreeState::new());
+            });
+        });
+        fn contains_root(shape: &egui::epaint::Shape) -> bool {
+            match shape {
+                egui::epaint::Shape::Text(text) => {
+                    text.galley.text().contains("Unobserved desktop")
+                }
+                egui::epaint::Shape::Vec(shapes) => shapes.iter().any(contains_root),
+                _ => false,
+            }
+        }
+        assert!(
+            output.shapes.iter().any(|s| contains_root(&s.shape)),
+            "Desktop root was skipped"
+        );
+    }
+
+    #[test]
+    fn unknown_branch_requests_children_only_while_expanded_and_selection_does_not_force_it_open() {
+        let ctx = egui::Context::default();
+        ctx.style_mut(|style| style.animation_time = 0.0);
+        let tree = UITreeXML::empty();
+        let mut state = TreeState::new();
+        let mut header_id = None;
+        for open in [true, false, true, false] {
+            state.pending_expansions.clear();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if let Some(id) = header_id {
+                        let mut collapse =
+                            egui::collapsing_header::CollapsingState::load(ctx, id).unwrap();
+                        collapse.set_open(open);
+                        collapse.store(ctx);
+                    }
+                    state.active_ui_element = Some(tree.root());
+                    state.path_to_active_ui_element = Some(vec![tree.root()]);
+                    state.reveal_selection = true;
+                    header_id = Some(
+                        UIExplorer::render_ui_tree_recursive(ui, &tree, tree.root(), &mut state).id,
+                    );
+                });
+            });
+            assert_eq!(
+                state.pending_expansions,
+                if open { vec![tree.root()] } else { vec![] }
+            );
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct TreeState {
     active_element: Option<SaveUIElementXML>,
     active_ui_element: Option<usize>,
     path_to_active_ui_element: Option<Vec<usize>>,
     refresh_path_to_active_ui_element: bool,
+    reveal_selection: bool,
+    pending_expansions: Vec<usize>,
 }
 
 impl TreeState {
@@ -30,6 +92,8 @@ impl TreeState {
             active_ui_element: None,
             path_to_active_ui_element: None,
             refresh_path_to_active_ui_element: false,
+            reveal_selection: false,
+            pending_expansions: Vec::new(),
         }
     }
 
@@ -44,6 +108,7 @@ impl TreeState {
             self.active_element = Some(new_active_element);
             self.active_ui_element = Some(new_active_ui_element);
             self.refresh_path_to_active_ui_element = true;
+            self.reveal_selection = true;
         }
     }
 
@@ -226,7 +291,7 @@ impl UIExplorer {
             xpath_input: None,
             xpath_eval_result: None,
             xpath_highlighting: false,
-            service: uitree::TreeService::from_tree(ui_tree.clone()),
+            service: uitree::TreeService::excluding_process(std::process::id()),
             pending_query: None,
             evaluated_xpath: None,
             ui_tree,
@@ -242,7 +307,13 @@ impl UIExplorer {
     #[inline(always)]
     fn render_ui_tree(&mut self, ui: &mut egui::Ui, state: &mut TreeState) {
         let tree = &self.ui_tree;
-        Self::render_ui_tree_recursive(ui, tree, 0, state);
+        Self::render_ui_tree_recursive(ui, tree, tree.root(), state);
+        if !state.refresh_path_to_active_ui_element {
+            state.reveal_selection = false;
+        }
+        for index in state.pending_expansions.drain(..) {
+            self.service.request_children(index);
+        }
     }
 
     #[inline(always)]
@@ -251,113 +322,55 @@ impl UIExplorer {
         tree: &UITreeXML,
         idx: usize,
         state: &mut TreeState,
-    ) {
-        for &child_index in tree.children(idx) {
-            let (name, ui_element) = tree.node(child_index);
-
-            // flag if this is the active element
-            let mut is_active_element: bool = false;
-            if let Some(active_id) = state.active_ui_element
-                && active_id == child_index
-            {
-                is_active_element = true;
+    ) -> egui::Response {
+        let (name, element) = tree.node(idx);
+        let selected = state.active_ui_element == Some(idx);
+        let observed = tree.coverage(idx).is_some_and(|c| c.children_observed);
+        if observed && tree.children(idx).is_empty() && idx != tree.root() {
+            let response = ui.selectable_label(selected, name);
+            if response.clicked() {
+                state.update_state(element.clone(), idx);
             }
-
-            if tree.children(child_index).is_empty() {
-                // Node has no children, so just show a label
-                let lbl = egui::Label::new(format!(
-                    "  {}{}",
-                    name,
-                    if tree
-                        .coverage(child_index)
-                        .is_some_and(|c| c.children_observed)
-                    {
-                        ""
-                    } else {
-                        " [not captured]"
-                    }
-                ))
-                .truncate()
-                .sense(egui::Sense::click());
-                let entry: Response = if is_active_element {
-                    let weak_bg_fill = ui
-                        .ctx()
-                        .theme()
-                        .default_visuals()
-                        .widgets
-                        .inactive
-                        .weak_bg_fill;
-                    egui::Frame::new()
-                        .fill(weak_bg_fill)
-                        .show(ui, |ui| {
-                            ui.add(lbl).on_hover_cursor(egui::CursorIcon::Default);
-                        })
-                        .response
-                } else {
-                    ui.add(lbl).on_hover_cursor(egui::CursorIcon::Default)
-                };
-
-                if entry.clicked() {
-                    state.update_state(ui_element.clone(), child_index);
-                }
-                if entry.hovered() {
-                    entry.highlight();
-                }
-            } else {
-                // Render children under collapsing header
-                let header: egui::CollapsingHeader;
-
-                // truncate long names to avoid UI issues
-                let limit: usize = 100;
-                let mut short_name: String = name.to_string();
-                let name_len = name.chars().count();
-                if name_len > limit {
-                    short_name = name.chars().take(limit).collect();
-                    short_name.push_str("...");
-                }
-
-                // println!("Header: {:?} - checking current element: {:?} against path {:?}", name, child_index, state.path_to_active_ui_element);
-                if !is_in_path_to_active_element(child_index, &state.path_to_active_ui_element) {
-                    // header is not on path, render a standard CollapsingHeader
-                    // unless it's the root node (index = 1), in which case we want to show it open by default
-                    if child_index == 1 {
-                        header = egui::CollapsingHeader::new(short_name)
-                            .id_salt(format!("ch_node{}", child_index))
-                            .open(Some(true));
-                    } else {
-                        header = egui::CollapsingHeader::new(short_name)
-                            .default_open(false)
-                            .id_salt(format!("ch_node{}", child_index))
-                    }
-                } else {
-                    // println!("element is in path");
-                    // println!("Element: {:?} ; {:?} is in path ; {:?}", name, child_index, state.path_to_active_ui_element);
-                    if is_active_element {
-                        // show background to visually highlight the active element
-                        header = egui::CollapsingHeader::new(short_name)
-                            .id_salt(format!("ch_node{}", child_index))
-                            .open(Some(true))
-                            .show_background(true);
-                    } else {
-                        header = egui::CollapsingHeader::new(short_name)
-                            .id_salt(format!("ch_node{}", child_index))
-                            .open(Some(true));
-                    }
-                }
-
-                let header_resp = header.show(ui, |ui| {
-                    // Recursively render children
-                    Self::render_ui_tree_recursive(ui, tree, child_index, state);
-                });
-
-                if name_len > limit {
-                    header_resp.header_response.clone().on_hover_text(name);
-                }
-                if header_resp.header_response.clicked() {
-                    state.update_state(ui_element.clone(), child_index);
-                }
-            }
+            return response;
         }
+
+        let mut label: String = name.chars().take(100).collect();
+        if name.chars().count() > 100 {
+            label.push_str("...");
+        }
+        if !observed {
+            label.push_str(" [not captured]");
+        }
+        let reveal = state.reveal_selection
+            && !state.refresh_path_to_active_ui_element
+            && !selected
+            && (idx == tree.root()
+                || is_in_path_to_active_element(idx, &state.path_to_active_ui_element));
+        let response = egui::CollapsingHeader::new(label)
+            .id_salt(format!("ch_node{idx}"))
+            .default_open(idx == tree.root())
+            .open(reveal.then_some(true))
+            .show_background(selected)
+            .show(ui, |ui| {
+                if !observed {
+                    ui.label("Loading children…");
+                }
+                for &child in tree.children(idx) {
+                    Self::render_ui_tree_recursive(ui, tree, child, state);
+                }
+            });
+        // egui also renders the body during the closing animation. Only the actual
+        // open state should request capture, not the presence of an animated body.
+        if !observed
+            && egui::collapsing_header::CollapsingState::load(ui.ctx(), response.header_response.id)
+                .is_some_and(|collapse| collapse.is_open())
+        {
+            state.pending_expansions.push(idx);
+        }
+        if response.header_response.clicked() {
+            state.update_state(element.clone(), idx);
+        }
+        response.header_response.on_hover_text(name)
     }
 
     #[inline(always)]
@@ -903,14 +916,6 @@ impl eframe::App for UIExplorer {
                     border.hide();
                 }
             }
-        }
-        if let Some(id) = state.active_ui_element
-            && !self
-                .ui_tree
-                .coverage(id)
-                .is_some_and(|c| c.children_observed)
-        {
-            self.service.request_region(id);
         }
         if self.recording {
             self.track_point(&mut state);

@@ -100,6 +100,10 @@ cargo run -p uiexplore --bin uiexplore --release
 UI Explore loads and repairs the tree in the background. Desktop access is
 subject to Windows session, privilege, and provider restrictions.
 
+Python coordinate lookup and UI Explore (with Simple XPath off) prefer unique
+window-scoped named locators, avoiding transient intermediate pane positions.
+Incomplete window coverage or ambiguous/unnamed controls retain full-path locators.
+
 ## Validation and release status
 
 See [Python regression test instructions](crates/bromium/tests/README_INCREMENTAL.md)

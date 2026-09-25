@@ -43,9 +43,16 @@ pub trait Capture {
 pub struct UiaCapture {
     automation: Option<UIAutomation>,
     elements: HashMap<Vec<i32>, UIElement>,
+    excluded_process: Option<u32>,
 }
 
 impl UiaCapture {
+    pub(crate) fn excluding_process(process: u32) -> Self {
+        Self {
+            excluded_process: Some(process),
+            ..Self::default()
+        }
+    }
     fn automation(&mut self) -> Result<UIAutomation, String> {
         if self.automation.is_none() {
             self.automation =
@@ -126,6 +133,13 @@ impl UiaCapture {
         } else {
             let mut observations = Vec::new();
             for child in children(a, &element, deadline, cancel)? {
+                // Test ownership before caching properties or descending into the provider.
+                // A failed ownership lookup must not publish excluded contents as valid.
+                if let Some(process) = self.excluded_process
+                    && child.get_process_id().map_err(|e| e.to_string())? == process
+                {
+                    continue;
+                }
                 observations.push(self.walk(a, child, depth - 1, deadline, cancel, count)?);
             }
             Some(observations)

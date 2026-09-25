@@ -358,7 +358,22 @@ impl UITree {
             .try_node(index)
             .map(|(_, p)| format_runtime_id(p.get_runtime_id()))
             .unwrap_or_default();
-        xmlutil::xpath_gen::get_xpath_full_from_runtime_id(&id, &self.xml_dom_tree, simple)
+        let complete_window = !simple
+            && self
+                .try_node(index)
+                .is_some_and(|_| self.has_complete_subtree(self.owning_window(index)));
+        if complete_window {
+            xmlutil::xpath_gen::get_xpath_window_scoped_from_runtime_id(&id, &self.xml_dom_tree)
+        } else {
+            xmlutil::xpath_gen::get_xpath_full_from_runtime_id(&id, &self.xml_dom_tree, simple)
+        }
+    }
+    fn has_complete_subtree(&self, index: usize) -> bool {
+        self.coverage(index).is_some_and(|c| c.children_observed)
+            && self
+                .children(index)
+                .iter()
+                .all(|&child| self.has_complete_subtree(child))
     }
     pub fn query(&self, xpath: &str) -> Result<Vec<&SaveUIElement>, String> {
         // Parenthesize expressions to preserve union and predicate semantics.
@@ -448,6 +463,46 @@ pub fn get_all_elements_par_xml(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scoped_locator_requires_complete_window_and_falls_back_on_duplicates() {
+        let window = Observation {
+            properties: SaveUIElement::fixture(2, "Notepad", "Window"),
+            children: Some(vec![
+                obs(3, "Settings", Some(vec![])),
+                obs(4, "Unknown", None),
+            ]),
+        };
+        let mut tree = UITree::from_observation(obs(1, "Desktop", Some(vec![window]))).unwrap();
+        let target = tree.index_for_id(&[42, 3]).unwrap();
+        let unknown = tree.index_for_id(&[42, 4]).unwrap();
+        assert!(
+            !tree
+                .get_xpath_for_element(target, false)
+                .unwrap()
+                .contains("//")
+        );
+        tree.commit(unknown, obs(4, "Unknown", Some(vec![])))
+            .unwrap();
+        let scoped = tree.get_xpath_for_element(target, false).unwrap();
+        assert!(scoped.ends_with("//Button[@Name='Settings']"));
+        assert_eq!(tree.query(&scoped).unwrap()[0].get_runtime_id(), &[42, 3]);
+        assert!(
+            !tree
+                .get_xpath_for_element(target, true)
+                .unwrap()
+                .contains("//")
+        );
+        tree.commit(
+            unknown,
+            obs(4, "Unknown", Some(vec![obs(5, "Settings", Some(vec![]))])),
+        )
+        .unwrap();
+        let fallback = tree.get_xpath_for_element(target, false).unwrap();
+        assert!(!fallback.contains("//"));
+        let matches = tree.query(&fallback).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].get_runtime_id(), &[42, 3]);
+    }
     fn obs(id: i32, name: &str, children: Option<Vec<Observation>>) -> Observation {
         Observation {
             properties: SaveUIElement::fixture(id, name, if id == 1 { "Pane" } else { "Button" }),

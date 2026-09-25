@@ -422,6 +422,9 @@ class WinDriver:
 
         Returns:
             The exposed hit-test element in the native window under the point.
+            Its XPath prefers a control-type/Name locator unique within the owning
+            window, avoiding intermediate pane positions. Ambiguous or unnamed
+            controls fall back to a full path. Uniqueness is snapshot-specific.
 
         Raises:
             ElementNotFoundError: If no exposed element is found, or the native

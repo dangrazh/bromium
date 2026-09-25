@@ -163,9 +163,94 @@ pub fn get_xpath_full_from_runtime_id(
     }
 }
 
+/// Prefer a named descendant unique within its outermost Window ancestor.
+/// The caller must supply complete window coverage before relying on uniqueness.
+/// Ambiguous/unnamed targets retain the full-path fallback.
+pub fn get_xpath_window_scoped_from_runtime_id(
+    runtime_id: &str,
+    xml: &str,
+) -> Result<String, XpathGenError> {
+    let doc = Document::parse(xml).map_err(|e| XpathGenError::XmlParseError(e.to_string()))?;
+    let index = AttributeIndex::build(&doc);
+    let target = doc
+        .descendants()
+        .find(|n| n.attribute("RtID") == Some(runtime_id))
+        .ok_or_else(|| XpathGenError::ElementNotFound(runtime_id.to_string()))?;
+    if let Some(window) = target
+        .ancestors()
+        .filter(|n| n.has_tag_name("Window"))
+        .last()
+        && window != target
+        && let Some(name) = target.attribute("Name").filter(|name| !name.is_empty())
+        && window
+            .descendants()
+            .filter(|n| {
+                *n != window
+                    && n.has_tag_name(target.tag_name().name())
+                    && n.attribute("Name") == Some(name)
+            })
+            .count()
+            == 1
+    {
+        let anchor = get_xpath_robula(&index, window, false);
+        return Ok(format!(
+            "{anchor}//{}[@Name={}]",
+            target.tag_name().name(),
+            xpath_string_literal(name)
+        ));
+    }
+    Ok(get_xpath_robula(&index, target, false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_scoped_locator_survives_tooltip_and_ignores_other_windows() {
+        let xml = r#"<Pane Name="Desktop" ControlType="Pane"><Window Name="Notepad" ControlType="Window"><Pane/><Pane><Button Name="Einstellungen" ControlType="Button" RtID="settings"/></Pane></Window><Window Name="Other" ControlType="Window"><Button Name="Einstellungen" ControlType="Button"/></Window></Pane>"#;
+        let popup = xml.replacen("<Pane/>", "<Pane Name=\"PopupHost\"/><Pane/>", 1);
+        let path = get_xpath_window_scoped_from_runtime_id("settings", xml).unwrap();
+        assert_eq!(
+            path,
+            "/Pane[@Name='Desktop']/Window[@Name='Notepad']//Button[@Name='Einstellungen']"
+        );
+        assert_eq!(
+            path,
+            get_xpath_window_scoped_from_runtime_id("settings", &popup).unwrap()
+        );
+        for snapshot in [xml, popup.as_str()] {
+            let result =
+                crate::xpath_eval::eval_xpath_thread_cached(&format!("({path})/@RtID"), snapshot);
+            assert!(result.is_success(), "{}", result.get_error_msg());
+            assert_eq!(result.get_result_items().len(), 1);
+            assert_eq!(result.get_result_items()[0].get_item_value(), "settings");
+        }
+        assert_ne!(
+            get_xpath_full_from_runtime_id("settings", xml, true).unwrap(),
+            get_xpath_full_from_runtime_id("settings", &popup, true).unwrap()
+        );
+    }
+
+    #[test]
+    fn duplicate_names_in_window_fall_back_to_full_path() {
+        let xml = r#"<Pane><Window Name="App" ControlType="Window"><Pane><Button Name="OK" ControlType="Button" RtID="a"/><Button Name="OK" ControlType="Button" RtID="b"/></Pane></Window></Pane>"#;
+        assert_eq!(
+            get_xpath_window_scoped_from_runtime_id("b", xml).unwrap(),
+            get_xpath_full_from_runtime_id("b", xml, false).unwrap()
+        );
+    }
+
+    #[test]
+    fn scoped_name_quotes_and_duplicate_window_titles_resolve_uniquely() {
+        let xml = r#"<Pane><Window Name="App" ControlType="Window"/><Window Name="App" ControlType="Window"><Pane><Button Name="It&apos;s &quot;OK&quot;" ControlType="Button" RtID="b"/></Pane></Window></Pane>"#;
+        let path = get_xpath_window_scoped_from_runtime_id("b", xml).unwrap();
+        assert!(path.starts_with("/Pane/Window[2]//Button["));
+        let result = crate::xpath_eval::eval_xpath_thread_cached(&format!("({path})/@RtID"), xml);
+        assert!(result.is_success(), "{}", result.get_error_msg());
+        assert_eq!(result.get_result_items().len(), 1);
+        assert_eq!(result.get_result_items()[0].get_item_value(), "b");
+    }
 
     const TEST_XML: &str = r#"<Root ControlType="Window" Name="MainWindow" RtID="rt-root">
   <Panel ControlType="Panel" Name="Header" RtID="rt-header">

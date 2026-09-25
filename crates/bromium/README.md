@@ -14,6 +14,14 @@ The workspace also includes UI Explore, a desktop tree inspector and XPath tool.
 - Get cursor position coordinates
 - Retrieve UI element information at specific coordinates
 
+Coordinate lookup generates a window-scoped XPath such as
+`/Pane[@Name='Desktop 1']/Window[@Name='resume.txt – Notepad']//Button[@Name='Einstellungen']`
+when the control's type and nonempty name are unique within its completely captured
+window. This avoids positional shifts caused by transient intermediate panes such
+as tooltip `PopupHost` nodes. Ambiguous or unnamed controls retain a full-path
+fallback. Uniqueness is established for the captured state, not guaranteed across
+future application changes; duplicate window titles can still require positions.
+
 
 
 ## Installation

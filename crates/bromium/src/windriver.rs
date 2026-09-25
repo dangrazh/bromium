@@ -759,7 +759,7 @@ impl WinDriver {
             let mut result = Self::element_from_save_ui(hit.get_element_props());
             result.xpath = self
                 .ui_tree
-                .get_xpath_for_element(hit.get_tree_index(), true)
+                .get_xpath_for_element(hit.get_tree_index(), false)
                 .unwrap_or_default();
             return Ok(self.attach(result));
         }

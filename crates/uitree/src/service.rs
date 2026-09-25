@@ -75,7 +75,17 @@ impl TreeService {
     }
     pub fn from_tree(tree: UITree) -> Self {
         let service = Self::with_capture(tree, UiaCapture::default);
-        start_events(Arc::clone(&service.shared));
+        start_events(Arc::clone(&service.shared), None);
+        service
+    }
+    /// An independent desktop view excluding one process before capture and subscription.
+    /// Intended for inspectors which must not recursively inspect their own accessibility UI.
+    /// The default service (including Python callers) remains unfiltered.
+    pub fn excluding_process(process: u32) -> Self {
+        let service = Self::with_capture(UITree::empty(), move || {
+            UiaCapture::excluding_process(process)
+        });
+        start_events(Arc::clone(&service.shared), Some(process));
         service
     }
     fn with_capture<C: Capture + 'static>(
@@ -217,13 +227,22 @@ impl TreeService {
     }
     /// Nonblocking GUI request for a selected region. Root requests reconcile membership only.
     pub fn request_region(&self, index: usize) {
-        let mut s = self.shared.state.lock().unwrap();
-        if s.tree.get_tree().has_node(index) {
-            let kind = if index == 0 {
+        self.request_capture(
+            index,
+            if index == 0 {
                 CaptureKind::Children
             } else {
                 CaptureKind::Subtree
-            };
+            },
+        );
+    }
+    /// Nonblocking, shallow expansion of a GUI branch. Unknown grandchildren remain lazy.
+    pub fn request_children(&self, index: usize) {
+        self.request_capture(index, CaptureKind::Children);
+    }
+    fn request_capture(&self, index: usize, kind: CaptureKind) {
+        let mut s = self.shared.state.lock().unwrap();
+        if s.tree.get_tree().has_node(index) {
             if !s.dirty.contains_key(&index) {
                 mark(&mut s, index, kind);
             }
@@ -566,10 +585,11 @@ fn run<C: Capture>(shared: Arc<Shared>, mut capture: C) {
         };
         jobs = jobs.wrapping_add(1);
         log::debug!(
-            "tree_schedule target={} kind={:?} queue_wait_us={}",
+            "tree_schedule target={} kind={:?} queue_wait_us={} window_handle={}",
             id,
             dirty.kind,
-            dirty.queued_at.elapsed().as_micros()
+            dirty.queued_at.elapsed().as_micros(),
+            request.window_handle
         );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             capture.capture(&request, &shared.stop)
@@ -635,7 +655,22 @@ fn event_runtime_id(sender: &uiautomation::UIElement) -> Option<Vec<i32>> {
     }
 }
 
-fn start_events(shared: Arc<Shared>) {
+fn excluded_window(handle: isize, excluded_process: Option<u32>) -> bool {
+    let Some(excluded) = excluded_process else {
+        return false;
+    };
+    let mut process = 0;
+    // Only queries the HWND owner; never calls the accessibility provider.
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+            windows::Win32::Foundation::HWND(handle as *mut _),
+            Some(&mut process),
+        );
+    }
+    process != 0 && process == excluded
+}
+
+fn start_events(shared: Arc<Shared>, excluded_process: Option<u32>) {
     thread::spawn(move || {
         use uiautomation::{
             events::*,
@@ -650,7 +685,17 @@ fn start_events(shared: Arc<Shared>) {
         {
             let state = Arc::clone(&shared);
             let handler: UIStructureChangeEventHandler = (Box::new(
-                move |_: &uiautomation::UIElement, _: StructureChangeType, _: Option<&[i32]>| {
+                move |sender: &uiautomation::UIElement,
+                      _: StructureChangeType,
+                      _: Option<&[i32]>| {
+                    // Cached properties only: callbacks must not reenter a live provider.
+                    if let Some(process) = excluded_process
+                        && matches!(sender.get_cached_property_value(UIProperty::ProcessId)
+                            .ok().and_then(|v| v.get_value().ok()),
+                            Some(uiautomation::variants::Value::I4(pid)) if pid == process as i32)
+                    {
+                        return Ok(());
+                    }
                     mark(&mut state.state.lock().unwrap(), 0, CaptureKind::Children);
                     state.changed.notify_all();
                     Ok(())
@@ -658,9 +703,20 @@ fn start_events(shared: Arc<Shared>) {
             )
                 as Box<CustomStructureChangedEventHandlerFn>)
                 .into();
-            if let Err(e) =
-                a.add_structure_changed_event_handler(&root, TreeScope::Children, None, &handler)
-            {
+            let desktop_cache = a
+                .create_cache_request()
+                .and_then(|cache| {
+                    cache.set_tree_scope(TreeScope::Element)?;
+                    cache.add_property(UIProperty::ProcessId)?;
+                    Ok(cache)
+                })
+                .ok();
+            if let Err(e) = a.add_structure_changed_event_handler(
+                &root,
+                TreeScope::Children,
+                desktop_cache.as_ref(),
+                &handler,
+            ) {
                 log::warn!("Desktop events unavailable: {e}");
             }
             desktop_handler = Some(handler);
@@ -696,7 +752,10 @@ fn start_events(shared: Arc<Shared>) {
                     }
                 }
                 for (owner, handle, expected) in &window_ids {
-                    if subscriptions.contains_key(owner) || *handle == 0 {
+                    if subscriptions.contains_key(owner)
+                        || *handle == 0
+                        || excluded_window(*handle, excluded_process)
+                    {
                         continue;
                     }
                     let Ok(element) =
@@ -708,6 +767,7 @@ fn start_events(shared: Arc<Shared>) {
                         continue;
                     }
                     let owner = *owner;
+                    log::debug!("tree_subscribe target={} window_handle={}", owner, handle);
                     let state = Arc::clone(&shared);
                     let property = crate::event_handler::property_handler(
                         move |sender: &uiautomation::UIElement, property: UIProperty| {
@@ -818,6 +878,9 @@ fn start_events(shared: Arc<Shared>) {
                             continue;
                         }
                         let hwnd = event.get_hwnd();
+                        if excluded_window(hwnd.0 as isize, excluded_process) {
+                            continue;
+                        }
                         let root = unsafe {
                             windows::Win32::UI::WindowsAndMessaging::GetAncestor(
                                 hwnd,
@@ -907,6 +970,65 @@ mod tests {
             properties: SaveUIElement::fixture(id, if id == 1 { "Desktop" } else { "App" }, "Pane"),
             children,
         }
+    }
+    #[test]
+    fn repeated_gui_expansion_is_one_shallow_capture_with_lazy_grandchildren() {
+        use std::sync::mpsc;
+        struct Expansion {
+            started: mpsc::Sender<CaptureKind>,
+            release: mpsc::Receiver<()>,
+        }
+        impl Capture for Expansion {
+            fn capture(
+                &mut self,
+                r: &CaptureRequest,
+                _: &AtomicBool,
+            ) -> Result<Observation, String> {
+                self.started.send(r.kind).unwrap();
+                self.release.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(obs(2, Some(vec![obs(4, None)])))
+            }
+        }
+        let (started_tx, started) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let tree =
+            UITree::from_observation(obs(1, Some(vec![obs(2, None), obs(3, None)]))).unwrap();
+        let target = tree.index_for_id(&[42, 2]).unwrap();
+        let sibling = tree.index_for_id(&[42, 3]).unwrap();
+        let revision = tree.revision();
+        let service = TreeService::with_capture(tree, move || Expansion {
+            started: started_tx,
+            release: release_rx,
+        });
+        service.request_children(target);
+        assert_eq!(
+            started.recv_timeout(Duration::from_secs(2)).unwrap(),
+            CaptureKind::Children
+        );
+        for _ in 0..100 {
+            service.request_children(target);
+        }
+        release.send(()).unwrap();
+        let mut s = service.shared.state.lock().unwrap();
+        while s.tree.revision() == revision {
+            let (next, timeout) = service
+                .shared
+                .changed
+                .wait_timeout(s, Duration::from_secs(2))
+                .unwrap();
+            s = next;
+            assert!(!timeout.timed_out(), "Expansion did not publish");
+        }
+        assert!(
+            s.dirty.is_empty(),
+            "Repeated frames queued duplicate captures"
+        );
+        assert!(started.try_recv().is_err());
+        assert!(s.tree.coverage(target).unwrap().children_observed);
+        assert!(!s.tree.coverage(sibling).unwrap().children_observed);
+        let child = s.tree.index_for_id(&[42, 4]).unwrap();
+        assert!(!s.tree.coverage(child).unwrap().children_observed);
+        assert_eq!(s.tree.get_elements().len(), 4);
     }
     struct Fake {
         calls: Arc<Mutex<Vec<CaptureKind>>>,
