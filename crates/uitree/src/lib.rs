@@ -7,7 +7,7 @@ mod tree_map;
 use tree_map::UITreeMap;
 
 mod save_ui_element;
-pub use save_ui_element::SaveUIElement;
+pub use save_ui_element::{ElementIdentity, SaveUIElement};
 /// Backward-compatible alias for the canonical `SaveUIElement` type.
 pub type SaveUIElementXML = SaveUIElement;
 
@@ -23,7 +23,7 @@ mod event_handler;
 mod service;
 pub use service::{StaleTree, TreeService};
 mod point;
-pub use point::{element_at_point, window_at_point};
+pub use point::{cached_region, element_at_point, resolve_point, window_at_point};
 
 mod uiexplore_xml;
 pub use uiexplore_xml::{

@@ -19,18 +19,18 @@ def br_get_xpath():
         print("Runtime ID:", element.runtime_id)
         print("Bounds:", element.bounding_rectangle)
         print("XPath:", element.xpath)        
-        print("getting Panes...")
-        panes = driver.get_elements_by_xpath(
-            "/Pane/Window[@Name='*Unbenannt – Notepad']/Pane"
-        )
-        print(f"Found {len(panes)} panes:")
-        for index, pane in enumerate(panes, 1):
-            print(
-                f"Pane[{index}]:",
-                repr(pane.name),
-                pane.runtime_id,
-                pane.bounding_rectangle,
-            )        
+        # print("getting Panes...")
+        # panes = driver.get_elements_by_xpath(
+        #     "/Pane/Window[@Name='*Unbenannt – Notepad']/Pane"
+        # )
+        # print(f"Found {len(panes)} panes:")
+        # for index, pane in enumerate(panes, 1):
+        #     print(
+        #         f"Pane[{index}]:",
+        #         repr(pane.name),
+        #         pane.runtime_id,
+        #         pane.bounding_rectangle,
+        #     )        
     
     except (bromium.ElementNotFoundError, AttributeError, RuntimeError, ValueError) as e:
         print(f"Error while trying to get XPath: {e}\n ")

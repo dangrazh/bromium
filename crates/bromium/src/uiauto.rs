@@ -15,7 +15,12 @@ pub fn get_ui_element_by_runtimeid(runtime_id: Vec<i32>) -> uiautomation::Result
         .timeout(0)
         .filter(Box::new(RuntimeIdFilter(runtime_id)))
         .depth(99);
-    let element = matcher.find_first();
+    let element = matcher.find_all().and_then(|mut elements| {
+        if elements.len() != 1 {
+            return Err(uiautomation::Error::new(1, "Runtime ID is missing or ambiguous; use a driver-created element or supply its native handle"));
+        }
+        Ok(elements.remove(0))
+    });
 
     match element {
         Ok(e) => {

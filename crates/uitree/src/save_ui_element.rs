@@ -4,6 +4,108 @@ use uiautomation::types::Handle;
 
 use bromium_common::{RuntimeIdFilter, get_ui_automation_instance};
 
+/// Tree occurrence: provider identity plus native handle, qualified by the full
+/// parent chain up to the nearest native anchor for handle-less elements.
+/// The raw runtime ID remains unchanged for public APIs and event matching.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ElementIdentity {
+    pub runtime_id: Vec<i32>,
+    pub handle: isize,
+    /// Immediate parent occurrence, recursively ending at a native anchor.
+    /// Never based on sibling position, name or bounds.
+    pub ancestor: Option<Box<ElementIdentity>>,
+    /// Publication-only identity for ambiguous or missing provider IDs. Never
+    /// used to re-identify a live element; fresh observations get fresh tokens.
+    pub occurrence: Option<u64>,
+}
+impl ElementIdentity {
+    pub fn key(&self) -> String {
+        let mut key = format!(
+            "{}@{}",
+            bromium_common::format_runtime_id(&self.runtime_id),
+            self.handle
+        );
+        if let Some(token) = self.occurrence {
+            key.push_str(&format!("!{token}"));
+        }
+        self.ancestor
+            .as_ref()
+            .map_or(key.clone(), |a| format!("{key}~{}", a.key()))
+    }
+    pub(crate) fn qualify(&mut self, ancestor: Option<&ElementIdentity>) {
+        self.ancestor = if self.handle == 0 {
+            ancestor.cloned().map(Box::new)
+        } else {
+            None
+        };
+    }
+    /// Point ancestry is ordered leaf-to-root, unlike capture traversal.
+    pub(crate) fn qualify_path(path: &mut [Self]) {
+        let mut context = None;
+        for id in path.iter_mut().rev() {
+            id.qualify(context.as_ref());
+            context = id.child_context();
+        }
+    }
+    pub(crate) fn child_context(&self) -> Option<Self> {
+        (self.handle != 0 || self.ancestor.is_some() || self.occurrence.is_some())
+            .then(|| self.clone())
+    }
+    pub fn is_resolvable(&self) -> bool {
+        !self.runtime_id.is_empty()
+            && self.occurrence.is_none()
+            && self.ancestor.as_ref().is_none_or(|a| a.is_resolvable())
+    }
+    pub(crate) fn native_anchor(&self) -> Option<&Self> {
+        let mut current = self;
+        loop {
+            if current.handle != 0 {
+                return Some(current);
+            }
+            current = current.ancestor.as_deref()?;
+        }
+    }
+    /// Provider properties only; callers traversing a known path supply occurrence context.
+    pub(crate) fn matches_provider(&self, element: &UIElement) -> bool {
+        self.is_resolvable()
+            && element.get_runtime_id().ok().as_ref() == Some(&self.runtime_id)
+            && element
+                .get_native_window_handle()
+                .ok()
+                .map(|h| -> isize { h.into() })
+                == Some(self.handle)
+    }
+    pub fn matches_live(&self, element: &UIElement) -> bool {
+        if !self.matches_provider(element) {
+            return false;
+        }
+        let Some(mut expected) = self.ancestor.as_deref() else {
+            return true;
+        };
+        let Ok(a) = get_ui_automation_instance() else {
+            return false;
+        };
+        let Ok(walker) = a.get_control_view_walker() else {
+            return false;
+        };
+        let mut current = element.clone();
+        for _ in 0..256 {
+            let Ok(parent) = walker.get_parent(&current) else {
+                return false;
+            };
+            if !expected.matches_provider(&parent) {
+                return false;
+            }
+            let Some(next) = expected.ancestor.as_deref() else {
+                return true;
+            };
+            expected = next;
+            current = parent;
+        }
+        false
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SaveUIElement {
     name: String,
@@ -14,6 +116,8 @@ pub struct SaveUIElement {
     runtime_id: Vec<i32>,
     automation_id: String,
     handle: isize,
+    ancestor: Option<Box<ElementIdentity>>,
+    occurrence: Option<u64>,
     bounding_rect: uiautomation::types::Rect,
     bounding_rect_size: i64,
     level: usize,
@@ -22,6 +126,39 @@ pub struct SaveUIElement {
 }
 
 impl SaveUIElement {
+    pub fn identity(&self) -> ElementIdentity {
+        ElementIdentity {
+            runtime_id: self.runtime_id.clone(),
+            handle: self.handle,
+            ancestor: self.ancestor.clone(),
+            occurrence: self.occurrence,
+        }
+    }
+    pub(crate) fn qualify(&mut self, ancestor: Option<&ElementIdentity>) {
+        let mut identity = self.identity();
+        identity.qualify(ancestor);
+        self.ancestor = identity.ancestor;
+    }
+    pub(crate) fn child_context(&self) -> Option<ElementIdentity> {
+        self.identity().child_context()
+    }
+    pub(crate) fn mark_snapshot_only(&mut self) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        if self.occurrence.is_none() {
+            self.occurrence = Some(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn with_handle(mut self, handle: isize) -> Self {
+        self.handle = handle;
+        self
+    }
+    #[cfg(test)]
+    pub(crate) fn with_rectangle(mut self, left: i32, top: i32, right: i32, bottom: i32) -> Self {
+        self.bounding_rect = uiautomation::types::Rect::new(left, top, right, bottom);
+        self.bounding_rect_size = i64::from(right - left) * i64::from(bottom - top);
+        self
+    }
     /// Construct a `SaveUIElement` by extracting all properties from a `UIElement`
     /// reference. The `UIElement` is borrowed — no COM `AddRef`/`Release` is needed.
     pub fn new(element: &UIElement, level: usize, z_order: usize) -> Self {
@@ -55,6 +192,8 @@ impl SaveUIElement {
             runtime_id,
             automation_id,
             handle,
+            ancestor: None,
+            occurrence: None,
             bounding_rect,
             bounding_rect_size,
             level,
@@ -131,9 +270,6 @@ impl SaveUIElement {
     /// Read one cached property bundle. A failed read rejects the observation.
     pub(crate) fn from_cache(element: &UIElement) -> uiautomation::Result<Self> {
         let runtime_id = element.get_runtime_id()?;
-        if runtime_id.is_empty() {
-            return Err(uiautomation::Error::new(1, "Missing runtime ID"));
-        }
         let bounding_rect = element.get_cached_bounding_rectangle()?;
         Ok(Self {
             name: element.get_cached_name()?,
@@ -144,6 +280,8 @@ impl SaveUIElement {
             runtime_id,
             automation_id: element.get_cached_automation_id()?,
             handle: element.get_cached_native_window_handle()?.into(),
+            ancestor: None,
+            occurrence: None,
             bounding_rect_size: (i64::from(bounding_rect.get_right())
                 - i64::from(bounding_rect.get_left()))
                 * (i64::from(bounding_rect.get_bottom()) - i64::from(bounding_rect.get_top())),
@@ -165,6 +303,9 @@ impl SaveUIElement {
     }
 
     pub fn get_ui_automation_ui_element(&self) -> Option<UIElement> {
+        if !self.identity().is_resolvable() {
+            return None;
+        }
         debug!(
             "Getting ui element from SaveUIElement with runtime id: {:?}",
             self.runtime_id
@@ -182,10 +323,11 @@ impl SaveUIElement {
         if self.handle != 0 {
             let handle = Handle::from(self.handle);
             match uia.element_from_handle(handle) {
-                Ok(e) => {
+                Ok(e) if self.identity().matches_live(&e) => {
                     debug!("Element found by handle: {}", self.handle);
                     return Some(e);
                 }
+                Ok(_) => return None,
                 Err(e) => {
                     debug!(
                         "element_from_handle failed ({}), falling back to runtime ID search",
@@ -203,8 +345,15 @@ impl SaveUIElement {
             .filter(Box::new(RuntimeIdFilter(runtime_id)))
             .depth(99);
 
-        match matcher.find_first() {
-            Ok(e) => {
+        match matcher.find_all() {
+            Ok(elements) => {
+                let mut matches = elements
+                    .into_iter()
+                    .filter(|e| self.identity().matches_live(e));
+                let e = matches.next()?;
+                if matches.next().is_some() {
+                    return None;
+                }
                 info!("Element found by runtime id: {:?}", e);
                 Some(e)
             }
@@ -249,6 +398,8 @@ impl Default for SaveUIElement {
             runtime_id: Vec::new(),
             automation_id: String::new(),
             handle: 0,
+            ancestor: None,
+            occurrence: None,
             bounding_rect: uiautomation::types::Rect::new(0, 0, 0, 0),
             bounding_rect_size: 0,
             level: 0,

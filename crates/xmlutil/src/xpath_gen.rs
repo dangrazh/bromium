@@ -150,12 +150,74 @@ pub fn get_xpath_full_from_runtime_id(
     xml: &str,
     simple_path: bool,
 ) -> Result<String, XpathGenError> {
+    get_xpath_full_from_attribute("RtID", runtime_id, xml, simple_path)
+}
+
+/// Locator backed only by the freshly observed ancestry and its immediate
+/// siblings. The native/provider window key avoids assuming desktop ordering;
+/// no uniqueness claim is made about uncaptured window descendants.
+pub fn get_xpath_spine_from_attribute(
+    attribute: &str,
+    value: &str,
+    xml: &str,
+    simple: bool,
+) -> Result<String, XpathGenError> {
+    let doc = Document::parse(xml).map_err(|e| XpathGenError::XmlParseError(e.to_string()))?;
+    let mut node = doc
+        .descendants()
+        .find(|n| n.attribute(attribute) == Some(value))
+        .ok_or_else(|| XpathGenError::ElementNotFound(value.to_owned()))?;
+    let mut parts = Vec::new();
+    while let Some(parent) = node.parent_element() {
+        if parent.parent_element().is_none() {
+            let key = node
+                .attribute("NodeKey")
+                .ok_or_else(|| XpathGenError::ElementNotFound(value.to_owned()))?;
+            parts.push(format!("*/*[@NodeKey={}]", xpath_string_literal(key)));
+            break;
+        }
+        let tag = node.tag_name().name();
+        let siblings: Vec<_> = parent
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == tag)
+            .collect();
+        let name = node.attribute("Name").filter(|n| !n.is_empty());
+        if !simple
+            && name.is_some()
+            && siblings
+                .iter()
+                .filter(|n| n.attribute("Name") == name)
+                .count()
+                == 1
+        {
+            parts.push(format!(
+                "{tag}[@Name={}]",
+                xpath_string_literal(name.unwrap())
+            ));
+        } else if siblings.len() > 1 {
+            let position = siblings.iter().position(|n| *n == node).unwrap() + 1;
+            parts.push(format!("{tag}[{position}]"));
+        } else {
+            parts.push(tag.to_owned());
+        }
+        node = parent;
+    }
+    parts.reverse();
+    Ok(format!("/{}", parts.join("/")))
+}
+
+pub fn get_xpath_full_from_attribute(
+    attribute: &str,
+    runtime_id: &str,
+    xml: &str,
+    simple_path: bool,
+) -> Result<String, XpathGenError> {
     let doc = Document::parse(xml).map_err(|e| XpathGenError::XmlParseError(e.to_string()))?;
     let index = AttributeIndex::build(&doc);
 
     if let Some(node_id) = doc
         .descendants()
-        .find(|n| n.attribute("RtID") == Some(runtime_id))
+        .find(|n| n.attribute(attribute) == Some(runtime_id))
     {
         Ok(get_xpath_robula(&index, node_id, simple_path))
     } else {
@@ -170,11 +232,19 @@ pub fn get_xpath_window_scoped_from_runtime_id(
     runtime_id: &str,
     xml: &str,
 ) -> Result<String, XpathGenError> {
+    get_xpath_window_scoped_from_attribute("RtID", runtime_id, xml)
+}
+
+pub fn get_xpath_window_scoped_from_attribute(
+    attribute: &str,
+    runtime_id: &str,
+    xml: &str,
+) -> Result<String, XpathGenError> {
     let doc = Document::parse(xml).map_err(|e| XpathGenError::XmlParseError(e.to_string()))?;
     let index = AttributeIndex::build(&doc);
     let target = doc
         .descendants()
-        .find(|n| n.attribute("RtID") == Some(runtime_id))
+        .find(|n| n.attribute(attribute) == Some(runtime_id))
         .ok_or_else(|| XpathGenError::ElementNotFound(runtime_id.to_string()))?;
     if let Some(window) = target
         .ancestors()

@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "bromium"
-version = "0.8.2"
+version = "0.8.7"
 dependencies = [
  "bromium-common",
  "chrono",

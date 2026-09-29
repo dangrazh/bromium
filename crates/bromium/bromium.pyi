@@ -129,6 +129,11 @@ class Element:
     are synchronous and have no enforced execution deadline: query timeouts do
     not cancel an action already running in COM.
 
+    Missing or ambiguous provider identities are retained as snapshot-only
+    occurrences. Actions on them, or on handle-less descendants whose identity
+    depends on them, raise ElementNotFoundError. Refresh never re-identifies them
+    using a name, rectangle, or sibling position.
+
     Driver-created elements retain an internal lifetime token and invalidate the
     affected cache after actions, including failed actions. Manual construction
     remains supported: a supplied HWND must match runtime_id; without a HWND,
@@ -150,7 +155,12 @@ class Element:
     def __str__(self) -> str: ...
     def __eq__(self, other: "Element") -> bool: ...
     def __hash__(self) -> int:
-        """Hash runtime ID only, as used by equality; not an incarnation/lifetime check."""
+        """Hash occurrence identity, including the full parent identity chain to
+        the native anchor for captured handle-less elements, as used by equality.
+        Names, bounds and row/sibling order do not affect identity. Not a lifetime check.
+        Manual construction does not infer ancestor context.
+        Snapshot-only occurrences include a token replaced on fresh observation.
+        """
         ...
 
     # ─── Properties ───────────────────────────────────────────────────────
@@ -177,7 +187,7 @@ class Element:
 
     @property
     def runtime_id(self) -> list[int]:
-        """Captured runtime ID; may be reused after removal, not a permanent identifier."""
+        """Unmodified provider runtime ID; may be ambiguous even with handle. Not permanent."""
         ...
 
     @property
@@ -416,6 +426,12 @@ class WinDriver:
         """
         Find the UI element at the given screen coordinates.
 
+        Resolves popup/menu windows through bounded UIA point discovery and
+        captures immediate children along the hit ancestry, not unrelated
+        window descendants. A separate point worker bypasses background captures. All work
+        shares the query deadline. A popup/window change during lookup raises
+        StaleTreeError instead of selecting a control underneath the dismissed menu.
+
         Args:
             x: The x screen coordinate.
             y: The y screen coordinate.
@@ -425,11 +441,14 @@ class WinDriver:
             Its XPath prefers a control-type/Name locator unique within the owning
             window, avoiding intermediate pane positions. Ambiguous or unnamed
             controls fall back to a full path. Uniqueness is snapshot-specific.
+            Partial/dirty windows use a session-specific NodeKey window anchor
+            and the observed ancestry, without assuming whole-window uniqueness.
 
         Raises:
             ElementNotFoundError: If no exposed element is found, or the native
                 window under the point is outside the configured title scope.
             StaleTreeError: If relevant coverage cannot be repaired by timeout_ms.
+                Also raised if the hit ancestry has missing/ambiguous identity.
         """
         ...
 
@@ -507,12 +526,13 @@ class WinDriver:
         ...
 
     def refresh_region(self, element: Element, timeout_ms: Optional[int] = None) -> None:
-        """Request subtree repair by runtime ID in this driver's cache; scope is unchanged.
+        """Request subtree repair by occurrence identity in this driver's cache; scope is unchanged.
 
         Raises StaleTreeError when its coverage cannot be repaired by the deadline,
         or ValueError if the element is no longer cached by this driver.
         None uses driver.timeout_ms, not tree_timeout_secs. This method looks up
-        runtime ID, not the originating Python object's service/incarnation token.
+        runtime ID, handle and native-ancestor context, not the originating
+        Python object's service/incarnation token.
         """
         ...
 

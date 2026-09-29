@@ -14,6 +14,23 @@ Rust owns each driver's cached tree. Startup acquires shallow desktop/window
 membership; descendants are acquired on demand. Events and age checks trigger
 incremental property, child-list, or subtree repairs.
 
+Tree identity combines the provider's runtime ID with the element's native
+window handle. For handle-less elements it also includes every parent identity
+back to the nearest native anchor. This preserves separate tree occurrences both
+under different popup hosts and under different rows within one native table.
+Names, bounds and sibling positions are not part of identity.
+Raw runtime IDs remain unchanged; ambiguous runtime-ID-only actions fail rather
+than selecting an arbitrary element. Python `Element` equality and hashing use
+this occurrence identity, not an element's lifetime token. Public runtime IDs and
+handles remain the provider's values; a handle-less element still reports `0`.
+
+Missing IDs and duplicate occurrences with identical ancestry are retained using
+snapshot-only tokens. Fresh captures replace these tokens; actions on these
+elements (or handle-less descendants depending on them) raise
+`ElementNotFoundError` rather than guessing from names, bounds, or positions.
+Valid siblings remain available. Debug `tree_missing_identity` records include
+ancestry, provider metadata, and original-versus-cached runtime IDs.
+
 Queries validate relevant coverage within a deadline. If coverage remains stale,
 they raise `bromium.StaleTreeError(TimeoutError)` with `reason`, `scope`,
 `revision`, and `coverage`. Stale coverage is not a definitive no-match.
@@ -28,6 +45,21 @@ scope. Assign `driver.window_title = None` to clear it.
 `len(driver)`, iteration, `snapshot_elements()`, and returned `Element`
 properties are cached views, not live queries. Query again for updated metadata.
 XPath membership (`xpath in driver`) is a coverage-aware query.
+
+Coordinate lookup is popup-aware: native handles, ownership and bounded UIA
+ancestry discovery map menus to their cached regions. It captures immediate
+children along the hit ancestry, not the entire Office/window subtree. All work
+shares one deadline. Debug `point_lookup` logs
+show the mapping and outcome; a popup disappearing during lookup reports stale
+state instead of returning a control beneath it.
+Point queries repair their anchored region without waiting for unrelated desktop
+membership changes. Missing windows can be discovered through UIA ancestry without
+enumerating desktop siblings. Global XPath queries still require their full query
+scope to be current. A separate bounded point worker avoids waiting behind a
+background subtree capture, but a blocked call on that point worker can still
+cause a deadline error. With partial coverage, generated locators use a
+session-specific window `NodeKey` and the observed ancestry; they do not claim
+name uniqueness across uncaptured descendants.
 
 ## Python library
 

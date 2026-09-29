@@ -22,6 +22,32 @@ as tooltip `PopupHost` nodes. Ambiguous or unnamed controls retain a full-path
 fallback. Uniqueness is established for the captured state, not guaranteed across
 future application changes; duplicate window titles can still require positions.
 
+Coordinate lookup supports popup/menu HWNDs nested inside an application's UIA
+tree as well as separately exposed menus. A bounded UIA point worker acquires the
+hit element and immediate children along its ancestry, without descending into
+unrelated branches. These steps share the query deadline; no desktop-wide or
+whole-window descendant capture is required. Dismissal or a
+native window change during the query raises `StaleTreeError`, rather than
+returning an unrelated control underneath. Menus may inherit their native owner's
+title scope; ordinary owned dialogs retain their own scope.
+
+Point lookup certifies the anchored region, not the entire desktop. It does not
+force or wait for unrelated desktop membership refreshes. For an uncached window,
+UIA ancestry can add that window without enumerating desktop siblings. This does
+not clear unrelated dirty regions or weaken XPath query coverage. The point
+worker is separate from the background subtree worker. A blocked point-provider
+call can still exhaust the deadline; COM calls cannot be forcibly interrupted.
+If the hit's own ancestry is missing or ambiguous, lookup raises `StaleTreeError`
+instead of selecting an arbitrary occurrence. With partial/dirty window coverage,
+the returned XPath uses a session-specific window `NodeKey` and sibling-validated
+ancestry; it does not assert uniqueness across uncaptured descendants.
+
+Enable Debug logging for `point_lookup` diagnostics: screen coordinates, native
+root handle, class and owner chain, selected cache/repair route, UIA ancestor
+identities when needed, and the final hit or failure. Provider discovery runs on
+one bounded worker; a deadline bounds the caller's wait but cannot cancel an
+individual COM call already in progress.
+
 
 
 ## Installation
@@ -245,7 +271,25 @@ WinDriver construction logs the received parameters and effective timeouts at
 Info level. Library-raised `StaleTreeError`, `ElementNotFoundError`,
 `AutomationError`, and `TreeConstructionError` log their details at Error level.
 Enable Debug logging to diagnose repair failures: each rejected commit records
-its target identity, capture kind, revision, and rejection reason. The latest
+its target identity, capture kind, revision, and rejection reason. Runtime-ID
+collisions include the shared ID and both elements' names, control types, and
+ancestry from the capture root. The one-based `child` positions distinguish even
+identically named siblings; these diagnostic paths are not XPath locators.
+The ancestry diagnostics use only captured data. At Debug level, the first
+colliding pair with the same full occurrence identity in each capture also emits
+`tree_collision_probe` records. Different-handle aliases are accepted without
+additional probe calls. This
+worker-side probe re-samples each original element's runtime ID before and after
+`BuildUpdatedCache`, the updated element's ID and cached properties, and up to
+16 immediate control-view children (no recursive capture). Records include names,
+control types, native handles, class/framework/provider information and bounds.
+This is a later diagnostic sample, not an atomic snapshot of the original
+collision. Errors, deadline skips and truncated child lists are reported rather
+than treated as valid empty data. Each occurrence has a one-second cooperative
+budget, also bounded by the capture deadline and cancellation; an individual
+provider call cannot be interrupted. The probe does not repair or publish data,
+and makes no additional provider calls when Debug logging is disabled or no
+collision is detected. The latest
 failure is retained per dirty region until recovery or removal; unrelated
 successful repairs do not erase it. Deadline errors include retained failures
 relevant to the query, and `tree_status` includes outstanding region errors.
@@ -306,7 +350,7 @@ The main class for interacting with the Windows UI Automation tree.
 - `find_elements(control_type: Optional[str] = None, name: Optional[str] = None) -> list[Element]`: Filters elements by case-insensitive substring match on control type and/or name. Returns an empty list if none match.
 - `refresh(window_title: Optional[str] = None) -> None`: Explicit membership reconciliation and scoped repair within `tree_timeout_secs`; a successful title override persists. None retains scope. Raises `StaleTreeError` on incomplete coverage.
 - `refresh_ui_tree(window_title: Optional[str] = None) -> None`: Compatibility alias for `refresh`.
-- `refresh_region(element: Element, timeout_ms: Optional[int] = None) -> None`: Requests subtree repair by the element's runtime ID in this driver's cache. None uses the driver query budget; scope is unchanged. Missing cached identity raises `ValueError`, incomplete repair raises `StaleTreeError`.
+- `refresh_region(element: Element, timeout_ms: Optional[int] = None) -> None`: Requests subtree repair by the element's occurrence identity (including native-ancestor context) in this driver's cache. None uses the driver query budget; scope is unchanged. Missing cached identity raises `ValueError`, incomplete repair raises `StaleTreeError`.
 - `snapshot_elements() -> list[Element]`: Returns cached elements in scope without waiting for coverage.
 - `launch_or_activate_app(app_path: str, xpath: str) -> Element`: Launches or activates an application, returning the element matching the XPath.
 - `get_screen_context() -> ScreenContext`: Returns information about all connected display screens.
@@ -318,8 +362,42 @@ The main class for interacting with the Windows UI Automation tree.
 Captured UI Automation metadata with live action methods. Properties are read-only.
 `Element(name, xpath, handle, control_type, runtime_id, bounding_rectangle)` is
 also public; see the manual-element limitations above. Equality and hashing use
-only runtime ID, not cached incarnation, name or rectangle. Runtime IDs are not
+runtime ID, native window handle and, for driver-created handle-less elements,
+the full parent identity chain back to the nearest native anchor, not cached
+incarnation, name, rectangle or sibling position. Runtime IDs are not
 permanent identifiers across removal/replacement.
+
+The cached tree, live-element cache and action-resolution paths use the same
+occurrence identity. The native anchor is qualified by its runtime ID and handle,
+and every intervening handle-less parent contributes its identity. Repeated menu
+subtrees under different popup hosts and repeated fields under different rows in
+one native table remain distinct. Row reordering does not change occurrence
+identity; removal or reparenting invalidates the old occurrence.
+Public `runtime_id` and `handle` are unchanged; ancestor context
+is internal and is not inferred by the manual `Element(...)` constructor.
+A raw `@RtID` XPath may match multiple occurrences; use a generated locator or
+ancestor-qualified XPath. `@NativeWindowHandle` alone cannot distinguish two
+handle-less occurrences. Runtime-ID-only events with ambiguous identity reconcile the owning window;
+manual runtime-ID-only actions reject ambiguous results. Missing-ID elements and
+duplicate observations with the same full occurrence identity are preserved using
+snapshot-only tokens, without erasing valid siblings or rejecting their capture.
+These tokens are replaced on fresh observation; equality/hashing include them.
+Their actions, and actions on handle-less descendants dependent on them, raise
+`ElementNotFoundError`. Names, bounds and sibling positions never re-identify an
+action target. Repair requests for snapshot-only occurrences target their nearest
+resolvable parent instead. Handle-less live
+resolution follows the qualified path from its native ancestor, rather than
+accepting an arbitrary provider-ID match.
+
+The XML `IdentityStatus` attribute distinguishes `provider` from `snapshot-only`
+occurrences. Public runtime IDs are never fabricated to fill missing IDs.
+
+Debug `tree_missing_identity` diagnostics report captured ancestry, element name,
+type, native handle, class/framework/provider and original-before, cached, and
+original-after runtime IDs. `tree_identity_diagnostic` and
+`tree_snapshot_occurrence` explain tolerated identity defects. Property/capture
+failures other than missing identity remain errors; they are not treated as empty
+child lists.
 
 #### Properties
 
@@ -329,7 +407,7 @@ permanent identifiers across removal/replacement.
 | `xpath` | `str` | The XPath locator for this element |
 | `handle` | `int` | The native window handle (HWND) |
 | `control_type` | `str` | The UI Automation control type (e.g. "Button", "Edit") |
-| `runtime_id` | `list[int]` | The runtime ID uniquely identifying this element |
+| `runtime_id` | `list[int]` | The unmodified provider runtime ID; not necessarily unique, even with `handle` |
 | `bounding_rectangle` | `tuple[int, int, int, int]` | Bounding rectangle as (left, top, right, bottom) |
 
 #### Methods

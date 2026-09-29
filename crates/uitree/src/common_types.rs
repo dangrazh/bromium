@@ -3,16 +3,13 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone)]
 pub struct UIElementInTree {
-    runtime_id: Vec<i32>,
     element_props: SaveUIElement,
     tree_index: usize,
 }
 
 impl UIElementInTree {
     pub fn new(element_props: SaveUIElement, tree_index: usize) -> Self {
-        let rt_id = element_props.get_runtime_id().to_vec();
         UIElementInTree {
-            runtime_id: rt_id,
             element_props,
             tree_index,
         }
@@ -29,7 +26,7 @@ impl UIElementInTree {
 
 impl PartialEq for UIElementInTree {
     fn eq(&self, other: &Self) -> bool {
-        self.runtime_id == other.runtime_id
+        self.element_props.identity() == other.element_props.identity()
     }
 }
 
@@ -37,6 +34,21 @@ impl Eq for UIElementInTree {}
 
 impl Hash for UIElementInTree {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.runtime_id.hash(state);
+        self.element_props.identity().hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn collection_identity_preserves_different_handle_aliases() {
+        let a = UIElementInTree::new(
+            SaveUIElement::fixture(3, "PopupHost", "Pane").with_handle(111),
+            1,
+        );
+        let b = UIElementInTree::new(SaveUIElement::fixture(3, "", "Pane").with_handle(222), 2);
+        let elements: std::collections::HashSet<_> = [a.clone(), b, a].into_iter().collect();
+        assert_eq!(elements.len(), 2);
     }
 }

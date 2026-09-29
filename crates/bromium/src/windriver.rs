@@ -135,6 +135,8 @@ pub struct Element {
     handle: isize,
     control_type: String,
     runtime_id: Vec<i32>,
+    ancestor: Option<Box<uitree::ElementIdentity>>,
+    occurrence: Option<u64>,
     service: Option<TreeService>,
     node_token: Option<usize>,
     bounding_rectangle: RECT,
@@ -167,6 +169,8 @@ impl Element {
             handle,
             control_type,
             runtime_id,
+            ancestor: None,
+            occurrence: None,
             service: None,
             node_token: None,
             bounding_rectangle,
@@ -193,12 +197,18 @@ impl Element {
 
     pub fn __eq__(&self, other: &Element) -> bool {
         self.runtime_id == other.runtime_id
+            && self.handle == other.handle
+            && self.ancestor == other.ancestor
+            && self.occurrence == other.occurrence
     }
 
     pub fn __hash__(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.runtime_id.hash(&mut hasher);
+        self.handle.hash(&mut hasher);
+        self.ancestor.hash(&mut hasher);
+        self.occurrence.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -228,7 +238,7 @@ impl Element {
         &self.control_type
     }
 
-    /// The runtime ID uniquely identifying this element in the current session.
+    /// The raw provider runtime ID; native handle disambiguates provider aliases.
     #[getter]
     pub fn runtime_id(&self) -> Vec<i32> {
         self.runtime_id.clone()
@@ -325,6 +335,8 @@ impl Default for Element {
             service: None,
             node_token: None,
             runtime_id: vec![],
+            ancestor: None,
+            occurrence: None,
             bounding_rectangle: RECT {
                 left: 0,
                 top: 0,
@@ -369,6 +381,17 @@ where
 }
 
 fn convert_to_ui_element(element: &Element) -> Result<UIElement, uiautomation::Error> {
+    if element.occurrence.is_some()
+        || element
+            .ancestor
+            .as_ref()
+            .is_some_and(|a| !a.is_resolvable())
+    {
+        return Err(uiautomation::Error::new(
+            1,
+            "Snapshot-only occurrence cannot identify an action target",
+        ));
+    }
     if element.runtime_id.is_empty() {
         return Err(uiautomation::Error::new(
             1,
@@ -460,16 +483,13 @@ impl WinDriver {
     /// Convert a `SaveUIElement` (from the uitree crate) into a Python-facing `Element`.
     fn element_from_save_ui(props: &SaveUIElementXML) -> Element {
         let bounding_rect = props.get_bounding_rectangle();
-        Element::new(
+        let mut element = Element::new(
             props.get_name().to_string(),
             props.get_xpath().map(str::to_owned).unwrap_or_else(|| {
                 if props.get_runtime_id().is_empty() {
                     String::new()
                 } else {
-                    format!(
-                        "//*[@RtID='{}']",
-                        bromium_common::format_runtime_id(props.get_runtime_id())
-                    )
+                    format!("//*[@NodeKey='{}']", props.identity().key())
                 }
             }),
             props.get_handle(),
@@ -481,12 +501,20 @@ impl WinDriver {
                 bounding_rect.get_right(),
                 bounding_rect.get_bottom(),
             ),
-        )
+        );
+        element.ancestor = props.identity().ancestor;
+        element.occurrence = props.identity().occurrence;
+        element
     }
 
     fn attach(&self, mut element: Element) -> Element {
         element.service = Some(self.service.clone());
-        element.node_token = self.ui_tree.index_for_id(&element.runtime_id);
+        element.node_token = self.ui_tree.index_for_identity(&uitree::ElementIdentity {
+            runtime_id: element.runtime_id.clone(),
+            handle: element.handle,
+            ancestor: element.ancestor.clone(),
+            occurrence: element.occurrence,
+        });
         element
     }
 
@@ -711,65 +739,26 @@ impl WinDriver {
         y: i32,
     ) -> PyResult<Element> {
         let deadline = Instant::now() + Duration::from_millis(self.timeout_ms);
-        loop {
-            self.ui_tree = self.service.snapshot();
-            let handle = uitree::window_at_point(x, y)
-                .ok_or_else(|| ElementNotFoundError::logged_err("No window at point"))?;
-            let mut window = self
-                .ui_tree
-                .children(0)
-                .iter()
-                .copied()
-                .find(|&id| self.ui_tree.node(id).1.get_handle() == handle);
-            if window.is_none() {
-                self.ui_tree = py
-                    .allow_threads(|| self.service.membership(deadline))
-                    .map_err(|e| stale_error(py, e))?;
-                window = self
-                    .ui_tree
-                    .children(0)
-                    .iter()
-                    .copied()
-                    .find(|&id| self.ui_tree.node(id).1.get_handle() == handle);
-            }
-            let id = window.ok_or_else(|| {
-                ElementNotFoundError::logged_err("Window has no exposed UIA element")
+        let found = py
+            .allow_threads(|| {
+                uitree::resolve_point(&self.service, x, y, self.window_title.as_deref(), deadline)
+            })
+            .map_err(|e| stale_error(py, e))?;
+        let (tree, index) = found.ok_or_else(|| {
+            ElementNotFoundError::logged_err(format!(
+                "No exposed UIA element at ({x}, {y}) within scope {:?}",
+                self.window_title
+            ))
+        })?;
+        self.ui_tree = tree;
+        let mut result = Self::element_from_save_ui(self.ui_tree.node(index).1);
+        result.xpath = self
+            .ui_tree
+            .get_xpath_for_element(index, false)
+            .map_err(|e| {
+                TreeConstructionError::logged_err(format!("Point locator generation failed: {e}"))
             })?;
-            if self
-                .window_title
-                .as_ref()
-                .is_some_and(|title| !self.ui_tree.node(id).1.get_name().contains(title))
-            {
-                return Err(ElementNotFoundError::logged_err(
-                    "Point is outside the configured window scope",
-                ));
-            }
-            self.ui_tree = py
-                .allow_threads(|| self.service.ensure_region(id, deadline))
-                .map_err(|e| stale_error(py, e))?;
-            if uitree::window_at_point(x, y) != Some(handle) {
-                if Instant::now() >= deadline {
-                    return Err(stale_error(
-                        py,
-                        uitree::StaleTree {
-                            reason: "Window under pointer changed during query".into(),
-                            scope: self.window_title.clone(),
-                            revision: self.ui_tree.revision(),
-                            coverage: "geometry".into(),
-                        },
-                    ));
-                }
-                continue;
-            }
-            let hit = uitree::element_at_point(&self.ui_tree, x, y)
-                .ok_or_else(|| ElementNotFoundError::logged_err("No exposed element at point"))?;
-            let mut result = Self::element_from_save_ui(hit.get_element_props());
-            result.xpath = self
-                .ui_tree
-                .get_xpath_for_element(hit.get_tree_index(), false)
-                .unwrap_or_default();
-            return Ok(self.attach(result));
-        }
+        Ok(self.attach(result))
     }
 
     /// Find a single element by XPath. If not found immediately, retries
@@ -1002,9 +991,18 @@ impl WinDriver {
         timeout_ms: Option<u64>,
     ) -> PyResult<()> {
         let tree = self.service.snapshot();
-        let index = tree.index_for_id(&element.runtime_id).ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("Element is no longer in this driver's tree")
-        })?;
+        let index = tree
+            .index_for_identity(&uitree::ElementIdentity {
+                runtime_id: element.runtime_id.clone(),
+                handle: element.handle,
+                ancestor: element.ancestor.clone(),
+                occurrence: element.occurrence,
+            })
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "Element is no longer in this driver's tree",
+                )
+            })?;
         self.service.request_region(index);
         let deadline =
             Instant::now() + Duration::from_millis(timeout_ms.unwrap_or(self.timeout_ms));
@@ -1085,6 +1083,37 @@ fn normalized(filename: String) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn snapshot_only_python_elements_never_resolve_by_metadata_or_handle() {
+        let mut first = super::Element::default();
+        first.runtime_id = vec![42, 7];
+        first.handle = 123;
+        first.occurrence = Some(1);
+        let mut second = first.clone();
+        second.occurrence = Some(2);
+        assert!(!first.__eq__(&second));
+        assert_ne!(first.__hash__(), second.__hash__());
+        assert!(
+            super::convert_to_ui_element(&first)
+                .unwrap_err()
+                .to_string()
+                .contains("Snapshot-only")
+        );
+        first.occurrence = None;
+        first.handle = 0;
+        first.ancestor = Some(Box::new(uitree::ElementIdentity {
+            runtime_id: vec![42, 6],
+            handle: 0,
+            ancestor: None,
+            occurrence: Some(3),
+        }));
+        assert!(
+            super::convert_to_ui_element(&first)
+                .unwrap_err()
+                .to_string()
+                .contains("Snapshot-only")
+        );
+    }
     use super::*;
 
     fn make_element(name: &str, xpath: &str, ct: &str, handle: isize) -> Element {
@@ -1099,6 +1128,24 @@ mod tests {
     }
 
     #[test]
+    fn aliased_runtime_ids_with_different_handles_are_distinct_elements() {
+        let first = Element::new(
+            "PopupHost".into(),
+            String::new(),
+            111,
+            "Pane".into(),
+            vec![42, 3],
+            (0, 0, 1, 1),
+        );
+        let mut second = first.clone();
+        second.handle = 222;
+        assert!(!first.__eq__(&second));
+        let copy = first.clone();
+        assert!(first.__eq__(&copy));
+        assert_eq!(first.__hash__(), copy.__hash__());
+    }
+
+    #[test]
     fn test_element_new_stores_all_fields() {
         let elem = make_element("Save", "//Button[@Name='Save']", "Button", 42);
         assert_eq!(elem.name(), "Save");
@@ -1110,6 +1157,26 @@ mod tests {
     }
 
     #[test]
+    fn handleless_occurrences_keep_ancestor_context_in_python_identity() {
+        let mut first = make_element("Open", "", "MenuItem", 0);
+        first.ancestor = Some(Box::new(uitree::ElementIdentity {
+            runtime_id: vec![42, 10],
+            handle: 333,
+            ancestor: None,
+            occurrence: None,
+        }));
+        let mut second = first.clone();
+        second.ancestor.as_mut().unwrap().handle = 444;
+        assert!(!first.__eq__(&second));
+        let copy = first.clone();
+        assert!(first.__eq__(&copy));
+        assert_eq!(first.__hash__(), copy.__hash__());
+        assert_eq!(first.handle(), 0);
+        assert_eq!(first.runtime_id(), second.runtime_id());
+        assert!(!first.__eq__(&make_element("Open", "", "MenuItem", 0)));
+    }
+
+    #[test]
     fn test_element_default_is_empty() {
         let elem = Element::default();
         assert_eq!(elem.name(), "");
@@ -1118,6 +1185,29 @@ mod tests {
         assert_eq!(elem.control_type(), "");
         assert!(elem.runtime_id().is_empty());
         assert_eq!(elem.bounding_rectangle(), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn repeated_fields_under_one_native_host_have_distinct_python_identity() {
+        let host = uitree::ElementIdentity {
+            runtime_id: vec![42, 100],
+            handle: 100,
+            ancestor: None,
+            occurrence: None,
+        };
+        let mut first = make_element("With Attachments", "", "Image", 0);
+        first.ancestor = Some(Box::new(uitree::ElementIdentity {
+            runtime_id: vec![42, -54],
+            handle: 0,
+            ancestor: Some(Box::new(host)),
+            occurrence: None,
+        }));
+        let mut second = first.clone();
+        second.ancestor.as_mut().unwrap().runtime_id = vec![42, -56];
+        assert!(!first.__eq__(&second));
+        assert_eq!(first.__hash__(), first.clone().__hash__());
+        assert_eq!(first.runtime_id(), second.runtime_id());
+        assert_eq!(first.handle(), second.handle());
     }
 
     #[test]

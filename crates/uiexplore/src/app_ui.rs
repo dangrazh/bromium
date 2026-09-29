@@ -102,7 +102,7 @@ impl TreeState {
         let is_new = self
             .active_element
             .as_ref()
-            .is_none_or(|current| new_active_element.get_runtime_id() != current.get_runtime_id());
+            .is_none_or(|current| new_active_element.identity() != current.identity());
 
         if is_new {
             self.active_element = Some(new_active_element);
@@ -262,6 +262,10 @@ pub struct UIExplorer {
     display_mode: DisplayMode,
     service: uitree::TreeService,
     pending_query: Option<(String, Receiver<Result<UITreeXML, uitree::StaleTree>>)>,
+    pending_point: Option<(
+        (i32, i32),
+        Receiver<Result<Option<(UITreeXML, usize)>, uitree::StaleTree>>,
+    )>,
     evaluated_xpath: Option<String>,
     border_window: Option<BorderWindow>,
 }
@@ -293,6 +297,7 @@ impl UIExplorer {
             xpath_highlighting: false,
             service: uitree::TreeService::excluding_process(std::process::id()),
             pending_query: None,
+            pending_point: None,
             evaluated_xpath: None,
             ui_tree,
             tree_state: None,
@@ -757,7 +762,7 @@ impl UIExplorer {
         {
             if elements.len() == 1 {
                 let props = elements[0];
-                if let Some(id) = self.ui_tree.index_for_id(props.get_runtime_id()) {
+                if let Some(id) = self.ui_tree.index_for_identity(&props.identity()) {
                     state.update_state(props.clone(), id);
                     self.process_highlighting(state);
                 }
@@ -802,29 +807,66 @@ impl UIExplorer {
         if unsafe { GetCursorPos(&mut point) }.is_err() {
             return;
         }
-        let window = uitree::window_at_point(point.x, point.y).and_then(|handle| {
-            self.ui_tree
-                .children(0)
-                .iter()
-                .copied()
-                .find(|&id| self.ui_tree.node(id).1.get_handle() == handle)
-        });
-        if let Some(window) = window {
-            // Zero wait schedules missing repair; never block an egui frame on COM.
-            if let Ok(tree) = self
+        let position = (point.x, point.y);
+        if let Some(region) = uitree::window_at_point(point.x, point.y)
+            .and_then(|handle| uitree::cached_region(&self.ui_tree, handle))
+            && let Ok(tree) = self
                 .service
-                .ensure_region(window, std::time::Instant::now())
-                && tree.revision() == self.ui_tree.revision()
-                && let Some(element) = uitree::element_at_point(&tree, point.x, point.y)
-            {
-                state.update_state(
-                    element.get_element_props().clone(),
-                    element.get_tree_index(),
-                );
-                return;
+                .ensure_region(region, std::time::Instant::now())
+            && tree.revision() == self.ui_tree.revision()
+            && let Some(hit) = uitree::element_at_point(&tree, point.x, point.y)
+        {
+            state.update_state(hit.get_element_props().clone(), hit.get_tree_index());
+            return;
+        }
+        if let Some((requested, rx)) = &self.pending_point {
+            match rx.try_recv() {
+                Ok(result) => {
+                    let matching = *requested == position;
+                    self.pending_point = None;
+                    if matching {
+                        match result {
+                            Ok(Some((tree, id))) if tree.revision() == self.service.revision() => {
+                                state.update_state(tree.node(id).1.clone(), id);
+                                self.ui_tree = tree;
+                                return;
+                            }
+                            Err(error) => self.set_status(error.to_string(), Duration::seconds(5)),
+                            _ => {}
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pending_point = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
             }
-        } else {
-            self.service.request_region(0);
+        }
+        if self.pending_point.is_none() {
+            if let Some(handle) = uitree::window_at_point(point.x, point.y) {
+                let mut process = 0;
+                // SAFETY: read-only ownership check avoids inspecting our own UIA provider.
+                unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                        windows::Win32::Foundation::HWND(handle as *mut _),
+                        Some(&mut process),
+                    );
+                }
+                if process == std::process::id() {
+                    return;
+                }
+            }
+            let service = self.service.clone();
+            let (tx, rx) = channel();
+            thread::spawn(move || {
+                let result = uitree::resolve_point(
+                    &service,
+                    position.0,
+                    position.1,
+                    None,
+                    std::time::Instant::now() + std::time::Duration::from_secs(5),
+                );
+                let _ = tx.send(result);
+            });
+            self.pending_point = Some((position, rx));
         }
         state.active_element = None;
         state.active_ui_element = None;
@@ -898,15 +940,12 @@ impl eframe::App for UIExplorer {
         }
         if self.service.revision() != self.ui_tree.revision() {
             let current = self.service.snapshot();
-            let selected = state
-                .active_element
-                .as_ref()
-                .map(|p| p.get_runtime_id().to_vec());
+            let selected = state.active_element.as_ref().map(|p| p.identity());
             self.ui_tree = current;
             self.xpath_eval_result = None;
             self.evaluated_xpath = None;
             self.xpath_highlighting = false;
-            if let Some(id) = selected.and_then(|id| self.ui_tree.index_for_id(&id)) {
+            if let Some(id) = selected.and_then(|id| self.ui_tree.index_for_identity(&id)) {
                 state.active_element = Some(self.ui_tree.node(id).1.clone());
                 state.active_ui_element = Some(id);
                 state.refresh_path_to_active_ui_element = true;

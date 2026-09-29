@@ -38,8 +38,13 @@ struct State {
     dirty: HashMap<usize, Dirty>,
     epoch: u64,
     membership_at: Instant,
+    invalidated_at: HashMap<crate::ElementIdentity, u64>,
+    invalidation_floor: u64,
     capture_timeout: Duration,
     interest: HashMap<usize, Instant>,
+    discovery_epoch: u64,
+    point_publications: HashMap<usize, u64>,
+    excluded_process: Option<u32>,
 }
 struct Shared {
     state: Mutex<State>,
@@ -85,10 +90,11 @@ impl TreeService {
         let service = Self::with_capture(UITree::empty(), move || {
             UiaCapture::excluding_process(process)
         });
+        service.shared.state.lock().unwrap().excluded_process = Some(process);
         start_events(Arc::clone(&service.shared), Some(process));
         service
     }
-    fn with_capture<C: Capture + 'static>(
+    pub(crate) fn with_capture<C: Capture + 'static>(
         tree: UITree,
         factory: impl FnOnce() -> C + Send + 'static,
     ) -> Self {
@@ -98,9 +104,14 @@ impl TreeService {
                 tree,
                 dirty: HashMap::new(),
                 epoch: 0,
+                invalidated_at: HashMap::new(),
+                invalidation_floor: 0,
                 membership_at: Instant::now(),
                 capture_timeout: Duration::from_secs(120),
                 interest: HashMap::new(),
+                discovery_epoch: 0,
+                point_publications: HashMap::new(),
+                excluded_process: None,
             }),
             changed: Condvar::new(),
             stop: AtomicBool::new(false),
@@ -118,6 +129,124 @@ impl TreeService {
     }
     pub fn snapshot(&self) -> UITree {
         self.shared.state.lock().unwrap().tree.clone()
+    }
+    pub(crate) fn point_capture_context(&self) -> (u64, Option<u32>) {
+        let s = self.shared.state.lock().unwrap();
+        (s.epoch, s.excluded_process)
+    }
+
+    /// Publish a positive point observation without certifying unrelated dirty
+    /// descendants. It runs independently of a blocked background subtree capture.
+    pub(crate) fn publish_point(
+        &self,
+        desktop: &crate::ElementIdentity,
+        observation: crate::Observation,
+        target: &crate::ElementIdentity,
+        process: u32,
+        started_epoch: u64,
+        deadline: Instant,
+    ) -> Result<(UITree, usize), String> {
+        let mut s = self.shared.state.lock().unwrap();
+        if Instant::now() >= deadline {
+            return Err("Point capture deadline expired".into());
+        }
+        if !s.tree.is_initialized() || s.tree.node(0).1.identity() != *desktop {
+            return Err("Point capture desktop changed".into());
+        }
+        if s.excluded_process == Some(process) {
+            return Err("Point capture process excluded".into());
+        }
+        let identity = observation.properties.identity();
+        let existing = s.tree.index_for_identity(&identity);
+        if existing.is_none()
+            && s.tree
+                .indices_for_id(&identity.runtime_id)
+                .iter()
+                .any(|&id| {
+                    let cached = s.tree.node(id).1.identity();
+                    cached.handle == identity.handle && !cached.is_resolvable()
+                })
+        {
+            return Err("Point window has ambiguous cached provider identity".into());
+        }
+        if existing.is_some_and(|id| s.tree.owning_window(id) != id) {
+            return Err("Point window ancestry conflicts with cached ancestry".into());
+        }
+        // Events observed after acquisition started invalidate overlapping evidence.
+        // Older dirtiness remains queued; unrelated windows cannot block this hit.
+        fn ancestry(
+            node: &crate::Observation,
+            target: &crate::ElementIdentity,
+            path: &mut Vec<crate::ElementIdentity>,
+        ) -> bool {
+            path.push(node.properties.identity());
+            if &node.properties.identity() == target {
+                return true;
+            }
+            if node
+                .children
+                .iter()
+                .flatten()
+                .any(|child| ancestry(child, target, path))
+            {
+                return true;
+            }
+            path.pop();
+            false
+        }
+        let mut path = Vec::new();
+        if !ancestry(&observation, target, &mut path) {
+            return Err("Point observation does not contain target".into());
+        }
+        if started_epoch < s.invalidation_floor
+            || s.invalidated_at
+                .iter()
+                .any(|(identity, &epoch)| epoch > started_epoch && path.contains(identity))
+        {
+            return Err("Point window invalidated during narrow capture".into());
+        }
+        let mut candidate = s.tree.clone();
+        let window = match existing {
+            Some(id) => id,
+            None => candidate.discover_window(observation.properties.clone())?,
+        };
+        candidate.commit(window, observation)?;
+        let index = candidate
+            .index_for_identity(target)
+            .filter(|&id| candidate.is_descendant(id, window))
+            .ok_or("Point target is missing or ambiguous in the captured ancestry")?;
+        if !candidate.node(index).1.identity().is_resolvable() {
+            return Err("Point target has snapshot-only identity".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("Point publication deadline expired".into());
+        }
+        s.tree = candidate;
+        s.discovery_epoch += 1;
+        let publication = s.discovery_epoch;
+        s.point_publications.insert(window, publication);
+        // Do not clear any dirty region: only the spine was acquired.
+        let mut result = s.tree.clone();
+        if !result.has_complete_subtree(window)
+            || s.dirty
+                .keys()
+                .any(|&id| id == 0 || result.is_descendant(id, window))
+        {
+            result.restrict_point_locator(index);
+        }
+        log::debug!(
+            "point_lookup published_spine window={} target={} revision={} retained_dirty_regions={}",
+            window,
+            index,
+            result.revision(),
+            s.dirty.len()
+        );
+        self.shared.changed.notify_all();
+        drop(s);
+        if let Some(wake) = self.shared.waker.lock().unwrap().clone() {
+            wake();
+        }
+        Ok((result, index))
     }
     pub fn revision(&self) -> u64 {
         self.shared.state.lock().unwrap().tree.revision()
@@ -147,23 +276,54 @@ impl TreeService {
         id: &[i32],
         expected: Option<usize>,
     ) -> Result<uiautomation::UIElement, String> {
-        let (request, index) = {
-            let s = self.shared.state.lock().unwrap();
-            let index = s.tree.index_for_id(id).ok_or("Element no longer cached")?;
-            if expected.is_some_and(|token| token != index) {
-                return Err("Cached element was removed or replaced".into());
-            }
-            (request(&s, index, CaptureKind::Properties), index)
-        };
+        let (request, index) = self.live_request(id, expected)?;
         let live = crate::capture::resolve_live(&request)?;
-        if self.shared.state.lock().unwrap().tree.index_for_id(id) != Some(index) {
+        if self
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .tree
+            .try_node(index)
+            .is_none_or(|(_, p)| {
+                Some(p.identity()) != request.target.as_ref().map(|p| p.identity())
+            })
+        {
             return Err("Cached element changed during live resolution".into());
         }
         Ok(live)
     }
+    fn live_request(
+        &self,
+        id: &[i32],
+        expected: Option<usize>,
+    ) -> Result<(CaptureRequest, usize), String> {
+        let result = {
+            let s = self.shared.state.lock().unwrap();
+            let index = match expected {
+                Some(token)
+                    if s.tree
+                        .try_node(token)
+                        .is_some_and(|(_, p)| p.get_runtime_id() == id) =>
+                {
+                    token
+                }
+                Some(_) => return Err("Cached element was removed or replaced".into()),
+                None => s
+                    .tree
+                    .index_for_id(id)
+                    .ok_or("Element no longer cached or runtime ID is ambiguous")?,
+            };
+            if !s.tree.node(index).1.identity().is_resolvable() {
+                return Err("Element has missing or ambiguous provider identity; snapshot-only occurrence cannot be used for actions".into());
+            }
+            (request(&s, index, CaptureKind::Properties), index)
+        };
+        Ok(result)
+    }
     pub fn invalidate_action(&self, id: &[i32]) {
         let mut s = self.shared.state.lock().unwrap();
-        if let Some(index) = s.tree.index_for_id(id) {
+        for index in s.tree.indices_for_id(id) {
             let parent = s.tree.get_tree().node(index).parent;
             mark(
                 &mut s,
@@ -180,7 +340,7 @@ impl TreeService {
     /// windows this is shallow desktop membership, never desktop descendants.
     pub fn invalidate_parent_membership(&self, id: &[i32]) {
         let mut s = self.shared.state.lock().unwrap();
-        if let Some(index) = s.tree.index_for_id(id) {
+        for index in s.tree.indices_for_id(id) {
             let parent = s.tree.get_tree().node(index).parent;
             mark(&mut s, parent, CaptureKind::Children);
             self.shared.changed.notify_all();
@@ -427,7 +587,8 @@ fn absolute_window_prefix(xpath: &str) -> Option<String> {
             if !body.chars().all(|c| c.is_ascii_digit()) {
                 let value = body
                     .strip_prefix("@Name=")
-                    .or_else(|| body.strip_prefix("@AutomationId="))?;
+                    .or_else(|| body.strip_prefix("@AutomationId="))
+                    .or_else(|| body.strip_prefix("@NodeKey="))?;
                 let quote = value.chars().next()?;
                 if quote != '\'' && quote != '"' {
                     return None;
@@ -470,7 +631,7 @@ fn query_roots(
             .query(prefix)
             .unwrap_or_default()
             .iter()
-            .filter_map(|p| tree.index_for_id(p.get_runtime_id()))
+            .filter_map(|p| tree.index_for_identity(&p.identity()))
             .filter(|id| allowed.contains(id))
             .collect();
     }
@@ -491,6 +652,18 @@ fn unobserved(tree: &UITree, index: usize, output: &mut Vec<usize>) {
     }
 }
 fn mark(s: &mut State, index: usize, kind: CaptureKind) {
+    let mut index = index;
+    let mut kind = kind;
+    // Snapshot-only nodes have no safe live locator. Repair their nearest
+    // resolvable parent, preserving ambiguity until a fresh observation replaces it.
+    while index != 0
+        && s.tree
+            .try_node(index)
+            .is_some_and(|(_, p)| !p.identity().is_resolvable())
+    {
+        index = s.tree.get_tree().node(index).parent;
+        kind = CaptureKind::Subtree;
+    }
     // Desktop-wide invalidation is always decomposed into shallow membership
     // plus window patches; never send a desktop Subtree request implicitly.
     let kind = if index == 0 {
@@ -499,6 +672,15 @@ fn mark(s: &mut State, index: usize, kind: CaptureKind) {
         kind
     };
     s.epoch += 1;
+    // Keep tombstones until bounded eviction: a background removal must not
+    // erase evidence that a point capture was invalidated while it was running.
+    if s.invalidated_at.len() >= 100_000 {
+        s.invalidated_at.clear();
+        s.invalidation_floor = s.epoch;
+    }
+    if let Some((_, properties)) = s.tree.try_node(index) {
+        s.invalidated_at.insert(properties.identity(), s.epoch);
+    }
     if let Some(ancestor) = s
         .dirty
         .iter()
@@ -548,13 +730,19 @@ fn region_errors(s: &State, relevant: impl Fn(usize, &Dirty) -> bool) -> Vec<Str
 }
 fn request(s: &State, target: usize, kind: CaptureKind) -> CaptureRequest {
     let window = s.tree.owning_window(target);
-    let path = s
+    let mut path: Vec<_> = s
         .tree
         .get_tree()
         .get_path_to_element(target)
         .into_iter()
-        .map(|i| s.tree.node(i).1.get_runtime_id().to_vec())
+        .map(|i| s.tree.node(i).1.identity())
         .collect();
+    // The arena path omits Desktop, which can anchor handle-less top-level nodes.
+    if target != 0
+        && s.tree.node(target).1.identity().native_anchor() == Some(&s.tree.node(0).1.identity())
+    {
+        path.insert(0, s.tree.node(0).1.identity());
+    }
     CaptureRequest {
         target: s
             .tree
@@ -590,6 +778,7 @@ fn run<C: Capture>(shared: Arc<Shared>, mut capture: C) {
                     let relevant = s.interest.keys().any(|&root| {
                         root == **i
                             || root != 0
+                                && **i != 0
                                 && (s.tree.is_descendant(**i, root)
                                     || s.tree.is_descendant(root, **i))
                     });
@@ -597,7 +786,12 @@ fn run<C: Capture>(shared: Arc<Shared>, mut capture: C) {
                 })
                 .map(|(&id, d)| (id, d.clone()));
             match next {
-                Some((id, dirty)) => Some((id, dirty.clone(), request(&s, id, dirty.kind))),
+                Some((id, dirty)) => Some((
+                    id,
+                    dirty.clone(),
+                    request(&s, id, dirty.kind),
+                    s.discovery_epoch,
+                )),
                 None => {
                     let delay = s
                         .dirty
@@ -611,7 +805,7 @@ fn run<C: Capture>(shared: Arc<Shared>, mut capture: C) {
                 }
             }
         };
-        let Some((id, dirty, request)) = job else {
+        let Some((id, dirty, request, discovery_epoch)) = job else {
             continue;
         };
         jobs = jobs.wrapping_add(1);
@@ -628,6 +822,30 @@ fn run<C: Capture>(shared: Arc<Shared>, mut capture: C) {
         .unwrap_or_else(|_| Err("Capture worker panicked; coverage retained for retry".into()));
         let phase = if result.is_ok() { "commit" } else { "capture" };
         let mut s = shared.state.lock().unwrap();
+        let existing: std::collections::HashSet<_> = s
+            .tree
+            .get_elements()
+            .iter()
+            .map(|e| e.get_tree_index())
+            .collect();
+        s.point_publications.retain(|id, _| existing.contains(id));
+        if discovery_epoch != s.discovery_epoch
+            && (id == 0
+                || s.point_publications.iter().any(|(&window, &epoch)| {
+                    epoch > discovery_epoch
+                        && (s.tree.is_descendant(id, window) || s.tree.is_descendant(window, id))
+                }))
+        {
+            log::debug!(
+                "tree_capture_superseded target={} identity={:?} reason=point_discovery captured_epoch={} current_epoch={}",
+                id,
+                request.target.as_ref().map(|p| p.identity()),
+                discovery_epoch,
+                s.discovery_epoch
+            );
+            shared.changed.notify_all();
+            continue;
+        }
         let result = result.and_then(|observation| s.tree.commit(id, observation));
         match result {
             Ok(()) => {
@@ -1015,6 +1233,212 @@ mod tests {
         }
     }
     #[test]
+    fn snapshot_only_actions_and_descendants_fail_closed_across_refresh() {
+        let rows = || {
+            obs(
+                1,
+                Some(vec![obs(
+                    2,
+                    Some(vec![
+                        obs(-122, Some(vec![obs(-11, Some(vec![]))])),
+                        obs(-122, Some(vec![obs(-11, Some(vec![]))])),
+                        obs(5, Some(vec![])),
+                    ]),
+                )]),
+            )
+        };
+        let service =
+            TreeService::with_capture(UITree::from_observation(rows()).unwrap(), || Fake {
+                calls: Arc::default(),
+                delay: Duration::ZERO,
+            });
+        let tree = service.snapshot();
+        let weak = tree.indices_for_id(&[42, -122]);
+        for raw in [[42, -122], [42, -11]] {
+            for token in tree.indices_for_id(&raw) {
+                assert!(
+                    service
+                        .live_request(&raw, Some(token))
+                        .unwrap_err()
+                        .contains("snapshot-only")
+                );
+            }
+        }
+        let healthy = tree.index_for_id(&[42, 5]).unwrap();
+        assert!(service.live_request(&[42, 5], Some(healthy)).is_ok());
+        {
+            let mut s = service.shared.state.lock().unwrap();
+            mark(&mut s, weak[0], CaptureKind::Properties);
+            let parent = s.tree.index_for_id(&[42, 2]).unwrap();
+            assert_eq!(s.dirty[&parent].kind, CaptureKind::Subtree);
+            assert!(!s.dirty.contains_key(&weak[0]));
+            s.tree.commit(0, rows()).unwrap();
+        }
+        for token in weak {
+            assert!(service.live_request(&[42, -122], Some(token)).is_err());
+        }
+        assert!(service.live_request(&[42, 5], Some(healthy)).is_ok());
+    }
+
+    #[test]
+    fn point_publication_preserves_membership_and_rejects_excluded_or_wrong_desktop() {
+        let service = TreeService::with_capture(
+            UITree::from_observation(obs(1, Some(vec![obs(2, None)]))).unwrap(),
+            || Fake {
+                calls: Arc::default(),
+                delay: Duration::ZERO,
+            },
+        );
+        let desktop = service.snapshot().node(0).1.identity();
+        let membership = service.snapshot().coverage(0).unwrap().children_observed_at;
+        let window = obs(3, Some(vec![obs(4, None)]));
+        let target = window.children.as_ref().unwrap()[0].properties.identity();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        service.shared.state.lock().unwrap().excluded_process = Some(123);
+        assert!(
+            service
+                .publish_point(&desktop, window.clone(), &target, 123, 0, deadline)
+                .is_err()
+        );
+        assert!(
+            service
+                .publish_point(&target, window.clone(), &target, 456, 0, deadline)
+                .is_err()
+        );
+        let (tree, _) = service
+            .publish_point(&desktop, window, &target, 456, 0, deadline)
+            .unwrap();
+        assert_eq!(tree.coverage(0).unwrap().children_observed_at, membership);
+        assert!(tree.index_for_id(&[42, 2]).is_some());
+        assert!(
+            !tree
+                .coverage(tree.index_for_id(&[42, 4]).unwrap())
+                .unwrap()
+                .children_observed
+        );
+    }
+
+    #[test]
+    fn point_publication_bypasses_and_supersedes_inflight_window_capture() {
+        use std::sync::mpsc;
+        struct Blocked {
+            started: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+        }
+        impl Capture for Blocked {
+            fn capture(
+                &mut self,
+                _: &CaptureRequest,
+                _: &AtomicBool,
+            ) -> Result<Observation, String> {
+                self.started.send(()).unwrap();
+                self.release
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|e| e.to_string())?;
+                Ok(obs(2, Some(vec![])))
+            }
+        }
+        let (started_tx, started) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let service = TreeService::with_capture(
+            UITree::from_observation(obs(1, Some(vec![obs(2, None)]))).unwrap(),
+            move || Blocked {
+                started: started_tx,
+                release: release_rx,
+            },
+        );
+        let window = service.snapshot().index_for_id(&[42, 2]).unwrap();
+        service.invalidate(window, CaptureKind::Subtree);
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        let epoch = service.point_capture_context().0;
+        let desktop = service.snapshot().node(0).1.identity();
+        let patch = obs(2, Some(vec![obs(4, None)]));
+        let target = patch.children.as_ref().unwrap()[0].properties.identity();
+        service
+            .publish_point(
+                &desktop,
+                patch,
+                &target,
+                456,
+                epoch,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        release.send(()).unwrap();
+        // A second capture can start only after the first result was discarded.
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(service.snapshot().index_for_id(&[42, 4]).is_some());
+        assert!(
+            service
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .dirty
+                .contains_key(&window)
+        );
+        drop(release);
+    }
+
+    #[test]
+    fn point_invalidation_history_survives_background_recovery() {
+        let service = TreeService::with_capture(
+            UITree::from_observation(obs(1, Some(vec![obs(2, Some(vec![obs(4, None)]))]))).unwrap(),
+            || Fake {
+                calls: Arc::default(),
+                delay: Duration::ZERO,
+            },
+        );
+        let desktop = service.snapshot().node(0).1.identity();
+        let patch = obs(2, Some(vec![obs(4, None)]));
+        let target = patch.children.as_ref().unwrap()[0].properties.identity();
+        let epoch = service.point_capture_context().0;
+        {
+            let mut s = service.shared.state.lock().unwrap();
+            let window = s.tree.index_for_id(&[42, 2]).unwrap();
+            mark(&mut s, window, CaptureKind::Properties);
+            s.dirty.clear(); // Simulate background recovery while point capture runs.
+        }
+        assert!(
+            service
+                .publish_point(
+                    &desktop,
+                    patch,
+                    &target,
+                    456,
+                    epoch,
+                    Instant::now() + Duration::from_secs(1)
+                )
+                .unwrap_err()
+                .contains("invalidated")
+        );
+    }
+    #[test]
+    fn action_requests_preserve_occurrence_context_and_desktop_anchor() {
+        let mut desktop = obs(1, Some(vec![obs(2, Some(vec![]))]));
+        desktop.properties = desktop.properties.with_handle(111);
+        let service =
+            TreeService::with_capture(UITree::from_observation(desktop).unwrap(), || Fake {
+                calls: Arc::default(),
+                delay: Duration::ZERO,
+            });
+        let index = service.snapshot().index_for_id(&[42, 2]).unwrap();
+        let (capture, token) = service.live_request(&[42, 2], Some(index)).unwrap();
+        assert_eq!(token, index);
+        let identity = capture.target.unwrap().identity();
+        assert_eq!(identity.ancestor.as_deref(), capture.path.first());
+        assert_eq!(capture.path.last(), Some(&identity));
+        assert_eq!(capture.path[0].handle, 111);
+        {
+            let mut s = service.shared.state.lock().unwrap();
+            let mut removed = obs(1, Some(vec![]));
+            removed.properties = removed.properties.with_handle(111);
+            s.tree.commit(0, removed).unwrap();
+        }
+        assert!(service.live_request(&[42, 2], Some(index)).is_err());
+    }
+
+    #[test]
     fn repeated_gui_expansion_is_one_shallow_capture_with_lazy_grandchildren() {
         use std::sync::mpsc;
         struct Expansion {
@@ -1072,6 +1496,46 @@ mod tests {
         let child = s.tree.index_for_id(&[42, 4]).unwrap();
         assert!(!s.tree.coverage(child).unwrap().children_observed);
         assert_eq!(s.tree.get_elements().len(), 4);
+    }
+
+    #[test]
+    fn repeated_row_action_requests_keep_exact_parent_paths_and_removed_tokens_fail() {
+        let row = |id| obs(id, Some(vec![obs(-11, Some(vec![]))]));
+        let mut table = obs(2, Some(vec![row(-54), row(-56)]));
+        table.properties = table.properties.with_handle(222);
+        let tree = UITree::from_observation(obs(1, Some(vec![table]))).unwrap();
+        let fields = tree.indices_for_id(&[42, -11]);
+        let service = TreeService::with_capture(tree, || Fake {
+            calls: Arc::default(),
+            delay: Duration::ZERO,
+        });
+        assert!(service.live_request(&[42, -11], None).is_err());
+        for (&token, row_id) in fields.iter().zip([-54, -56]) {
+            let (request, resolved) = service.live_request(&[42, -11], Some(token)).unwrap();
+            assert_eq!(token, resolved);
+            assert_eq!(request.path[1].runtime_id, vec![42, row_id]);
+            assert_eq!(
+                request.path.last().unwrap().ancestor.as_deref(),
+                Some(&request.path[1])
+            );
+            assert_eq!(
+                request.target.unwrap().identity(),
+                *request.path.last().unwrap()
+            );
+        }
+        let snapshot = service.snapshot();
+        let mut patch = snapshot.observation(snapshot.index_for_id(&[42, 2]).unwrap());
+        patch.children.as_mut().unwrap().remove(0);
+        service
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .tree
+            .commit(snapshot.index_for_id(&[42, 2]).unwrap(), patch)
+            .unwrap();
+        assert!(service.live_request(&[42, -11], Some(fields[0])).is_err());
+        assert!(service.live_request(&[42, -11], Some(fields[1])).is_ok());
     }
     struct Fake {
         calls: Arc<Mutex<Vec<CaptureKind>>>,
@@ -1155,6 +1619,70 @@ mod tests {
             assert!(service.snapshot().index_for_id(&[42, target]).is_none());
         }
     }
+    #[test]
+    fn aliased_runtime_id_actions_require_token_and_keep_qualified_path() {
+        let mut popup = obs(3, Some(vec![]));
+        popup.properties = popup.properties.with_handle(111);
+        let mut input = obs(3, Some(vec![obs(4, Some(vec![]))]));
+        input.properties = input.properties.with_handle(222);
+        let tree = UITree::from_observation(obs(
+            1,
+            Some(vec![obs(2, Some(vec![popup.clone(), input.clone()]))]),
+        ))
+        .unwrap();
+        let popup_token = tree
+            .index_for_identity(&popup.properties.identity())
+            .unwrap();
+        let input_token = tree
+            .index_for_identity(&input.properties.identity())
+            .unwrap();
+        let child_token = tree.index_for_id(&[42, 4]).unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let service = TreeService::with_capture(tree, move || Fake {
+            calls,
+            delay: Duration::ZERO,
+        });
+        assert!(
+            service
+                .live_request(&[42, 3], None)
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+        for (token, handle) in [(popup_token, 111), (input_token, 222)] {
+            let (request, _) = service.live_request(&[42, 3], Some(token)).unwrap();
+            assert_eq!(request.target.unwrap().get_handle(), handle);
+            assert_eq!(request.path.last().unwrap().handle, handle);
+        }
+        let (request, _) = service.live_request(&[42, 4], Some(child_token)).unwrap();
+        assert!(
+            request
+                .path
+                .iter()
+                .any(|identity| identity.runtime_id == [42, 3] && identity.handle == 222)
+        );
+        {
+            let mut s = service.shared.state.lock().unwrap();
+            let owner = s.tree.index_for_id(&[42, 2]).unwrap();
+            s.tree.commit(owner, obs(2, Some(vec![input]))).unwrap();
+        }
+        assert!(
+            service
+                .live_request(&[42, 3], Some(popup_token))
+                .unwrap_err()
+                .contains("removed or replaced")
+        );
+        assert_eq!(
+            service
+                .live_request(&[42, 3], Some(input_token))
+                .unwrap()
+                .0
+                .target
+                .unwrap()
+                .get_handle(),
+            222
+        );
+    }
+
     #[test]
     fn obsolete_action_token_rejects_reused_runtime_id_without_provider_calls() {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1326,7 +1854,7 @@ mod tests {
                 Ok(if id == 1 {
                     obs(1, Some(vec![obs(2, None), obs(3, None)]))
                 } else if id == 2 && !self.0.load(Ordering::SeqCst) {
-                    obs(2, Some(vec![obs(4, None), obs(4, None)]))
+                    obs(99, Some(vec![])) // Invalid target, not tolerable provider ambiguity.
                 } else {
                     obs(id, Some(vec![]))
                 })
@@ -1362,7 +1890,7 @@ mod tests {
                     .error
                     .as_ref()
                     .unwrap()
-                    .contains("duplicate")
+                    .contains("identity changed")
             );
             mark(&mut state, target, CaptureKind::Subtree);
             assert!(
@@ -1372,7 +1900,7 @@ mod tests {
             assert!(region_errors(&state, |id, _| id != target).is_empty());
         }
         let error = service.ensure(None, Instant::now()).unwrap_err();
-        assert!(error.reason.contains("duplicate"));
+        assert!(error.reason.contains("identity changed"));
         assert!(error.reason.contains(&format!("target={target}")));
         fixed.store(true, Ordering::SeqCst);
         {
@@ -1466,6 +1994,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(*calls.lock().unwrap(), vec![vec![42, 2]]);
+        service
+            .ensure_query(
+                "/*/*[@NodeKey='42-2@0']//Button",
+                None,
+                Instant::now() + Duration::from_secs(2),
+            )
+            .unwrap();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![vec![42, 2]],
+            "Generated point locators must not expand the query to unrelated windows"
+        );
         assert!(!service.snapshot().coverage(2).unwrap().children_observed);
     }
 }

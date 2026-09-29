@@ -1,5 +1,7 @@
 //! Bounded-scope acquisition. COM objects stay on the capture worker.
-use crate::{Observation, SaveUIElement, UITree, UITreeError};
+use crate::{ElementIdentity, Observation, SaveUIElement, UITree, UITreeError};
+#[path = "capture_probe.rs"]
+mod probe;
 use std::{
     collections::HashMap,
     sync::{
@@ -25,7 +27,7 @@ pub enum CaptureKind {
 pub struct CaptureRequest {
     pub target: Option<SaveUIElement>,
     /// Path from the owning window to the target, for bounded re-resolution.
-    pub path: Vec<Vec<i32>>,
+    pub path: Vec<ElementIdentity>,
     pub window_handle: isize,
     pub kind: CaptureKind,
     pub deadline: Instant,
@@ -42,8 +44,10 @@ pub trait Capture {
 #[derive(Default)]
 pub struct UiaCapture {
     automation: Option<UIAutomation>,
-    elements: HashMap<Vec<i32>, UIElement>,
+    elements: HashMap<ElementIdentity, UIElement>,
     excluded_process: Option<u32>,
+    probe: probe::Collisions<UIElement>,
+    diagnostic_ancestry: Vec<String>,
 }
 
 impl UiaCapture {
@@ -69,42 +73,87 @@ impl UiaCapture {
         let Some(target) = &request.target else {
             return a.get_root_element().map_err(|e| e.to_string());
         };
-        let id = target.get_runtime_id();
-        if let Some(element) = self.elements.get(id) {
-            if element.get_runtime_id().ok().as_deref() == Some(id) {
+        let id = target.identity();
+        if !id.is_resolvable() {
+            return Err(
+                "Snapshot-only occurrence cannot be re-resolved; refresh its stable parent".into(),
+            );
+        }
+        // Handle-less references may be exposed through multiple host paths.
+        // Rewalk their qualified path rather than trusting a provider-only match.
+        if id.handle != 0
+            && let Some(element) = self.elements.get(&id)
+        {
+            if id.matches_live(element) {
                 return Ok(element.clone());
             }
-            self.elements.remove(id);
+            self.elements.remove(&id);
         }
         if target.get_handle() != 0
             && let Ok(element) = a.element_from_handle(Handle::from(target.get_handle()))
-            && element.get_runtime_id().ok().as_deref() == Some(id)
+            && id.matches_live(&element)
         {
             return Ok(element);
         }
-        let mut element = if request.window_handle != 0 {
+        // Native targets retain the owning-window/path fallback if direct HWND
+        // resolution is unavailable (for example a popup site bridge).
+        let anchor = if id.handle == 0 {
+            id.native_anchor()
+        } else {
+            None
+        };
+        let path = if let Some(anchor) = anchor {
+            let start = request
+                .path
+                .iter()
+                .rposition(|p| p == anchor)
+                .ok_or("Qualified occurrence has no native anchor in target path")?;
+            &request.path[start..]
+        } else {
+            &request.path[..]
+        };
+        let mut element = if let Some(anchor) = anchor {
+            let element = a
+                .element_from_handle(Handle::from(anchor.handle))
+                .map_err(|e| e.to_string())?;
+            if !anchor.matches_provider(&element) {
+                return Err("Native ancestor identity changed".into());
+            }
+            element
+        } else if request.window_handle != 0 {
             a.element_from_handle(Handle::from(request.window_handle))
                 .map_err(|e| e.to_string())?
         } else {
             a.get_root_element().map_err(|e| e.to_string())?
         };
-        for expected in &request.path {
+        let mut context = anchor.cloned();
+        for (position, expected) in path.iter().enumerate() {
             check(request.deadline, cancel)?;
-            if element.get_runtime_id().ok().as_ref() == Some(expected) {
+            if position == 0 && expected.matches_provider(&element) {
+                context = expected.child_context();
                 continue;
             }
+            if expected.handle == 0 && expected.ancestor.as_deref() != context.as_ref() {
+                return Err("Target occurrence ancestry changed".into());
+            }
             let children = children(a, &element, request.deadline, cancel)?;
-            element = children
+            let mut matches = children
                 .into_iter()
-                .find(|e| e.get_runtime_id().ok().as_ref() == Some(expected))
+                .filter(|e| expected.matches_provider(e));
+            element = matches
+                .next()
                 .ok_or("Target path changed; parent reconciliation required")?;
+            if matches.next().is_some() {
+                return Err("Ambiguous live identity; parent reconciliation required".into());
+            }
+            context = expected.child_context();
         }
-        if element.get_runtime_id().ok().as_deref() != Some(id) {
+        if !id.matches_provider(&element) {
             return Err("Target identity changed".into());
         }
         Ok(element)
     }
-    fn walk(
+    pub(crate) fn walk(
         &mut self,
         a: &UIAutomation,
         element: UIElement,
@@ -112,37 +161,88 @@ impl UiaCapture {
         deadline: Instant,
         cancel: &AtomicBool,
         count: &mut usize,
+        ancestor: Option<&ElementIdentity>,
     ) -> Result<Observation, String> {
         check(deadline, cancel)?;
         *count += 1;
         if *count > 100_000 {
             return Err("Capture node limit exceeded; coverage incomplete".into());
         }
+        let original_id = if log::log_enabled!(log::Level::Debug) {
+            Some(element.get_runtime_id())
+        } else {
+            None
+        };
         let cached = element
             .build_updated_cache(&cache_request(a)?)
             .map_err(|e| e.to_string())?;
-        let properties = SaveUIElement::from_cache(&cached).map_err(|e| e.to_string())?;
+        let cached_id = log::log_enabled!(log::Level::Debug).then(|| cached.get_runtime_id());
+        if cached_id
+            .as_ref()
+            .is_some_and(|id| id.as_ref().map_or(true, |id| id.is_empty()))
+        {
+            log::debug!(
+                "tree_missing_identity ancestry={:?} ancestor_identity={:?} name={:?} control_type={:?} native_handle={:?} class={:?} framework={:?} provider={:?} original_before={:?} cached_runtime_id={:?} original_after={:?}",
+                self.diagnostic_ancestry,
+                ancestor,
+                cached.get_cached_name(),
+                cached.get_cached_control_type(),
+                cached.get_cached_native_window_handle(),
+                cached.get_cached_classname(),
+                cached.get_cached_framework_id(),
+                cached.get_cached_provider_description(),
+                original_id,
+                cached_id,
+                element.get_runtime_id()
+            );
+        }
+        let mut properties = SaveUIElement::from_cache(&cached).map_err(|e| e.to_string())?;
+        properties.qualify(ancestor);
+        let context = properties.child_context();
+        if log::log_enabled!(log::Level::Debug) {
+            self.probe.observe(&properties.identity(), &element);
+        }
         // Bound retained COM references. Eviction only affects resolution cost, not identity.
         if self.elements.len() >= 100_000 {
             self.elements.clear();
         }
-        self.elements
-            .insert(properties.get_runtime_id().to_vec(), element.clone());
+        if properties.get_handle() != 0 {
+            self.elements.insert(properties.identity(), element.clone());
+        }
         let observed_children = if depth == 0 {
             None
         } else {
-            let mut observations = Vec::new();
-            for child in children(a, &element, deadline, cancel)? {
-                // Test ownership before caching properties or descending into the provider.
-                // A failed ownership lookup must not publish excluded contents as valid.
-                if let Some(process) = self.excluded_process
-                    && child.get_process_id().map_err(|e| e.to_string())? == process
-                {
-                    continue;
+            self.diagnostic_ancestry.push(format!(
+                "name={:?} control_type={:?} native_handle={} runtime_id={:?}",
+                properties.get_name(),
+                properties.get_control_type(),
+                properties.get_handle(),
+                properties.get_runtime_id()
+            ));
+            let result = (|| -> Result<Vec<Observation>, String> {
+                let mut observations = Vec::new();
+                for child in children(a, &element, deadline, cancel)? {
+                    // Test ownership before caching properties or descending into the provider.
+                    // A failed ownership lookup must not publish excluded contents as valid.
+                    if let Some(process) = self.excluded_process
+                        && child.get_process_id().map_err(|e| e.to_string())? == process
+                    {
+                        continue;
+                    }
+                    observations.push(self.walk(
+                        a,
+                        child,
+                        depth - 1,
+                        deadline,
+                        cancel,
+                        count,
+                        context.as_ref(),
+                    )?);
                 }
-                observations.push(self.walk(a, child, depth - 1, deadline, cancel, count)?);
-            }
-            Some(observations)
+                Ok(observations)
+            })();
+            self.diagnostic_ancestry.pop();
+            Some(result?)
         };
         check(deadline, cancel)?;
         Ok(Observation {
@@ -152,7 +252,7 @@ impl UiaCapture {
     }
 }
 
-fn cache_request(a: &UIAutomation) -> Result<UICacheRequest, String> {
+pub(crate) fn cache_request(a: &UIAutomation) -> Result<UICacheRequest, String> {
     let cache = a.create_cache_request().map_err(|e| e.to_string())?;
     cache
         .set_tree_scope(TreeScope::Element)
@@ -168,6 +268,11 @@ fn cache_request(a: &UIAutomation) -> Result<UICacheRequest, String> {
         UIProperty::BoundingRectangle,
     ] {
         cache.add_property(property).map_err(|e| e.to_string())?;
+    }
+    if log::log_enabled!(log::Level::Debug) {
+        cache
+            .add_property(UIProperty::ProviderDescription)
+            .map_err(|e| e.to_string())?;
     }
     Ok(cache)
 }
@@ -226,6 +331,7 @@ impl Capture for UiaCapture {
         let a = self.automation()?;
         let root = self.resolve(&a, request, cancel)?;
         let mut count = 0;
+        self.probe = probe::Collisions::default();
         let result = self.walk(
             &a,
             root,
@@ -237,6 +343,11 @@ impl Capture for UiaCapture {
             request.deadline,
             cancel,
             &mut count,
+            request
+                .target
+                .as_ref()
+                .and_then(|p| p.identity().ancestor)
+                .as_deref(),
         );
         log::debug!(
             "tree_capture kind={:?} nodes={} elapsed_us={} success={}",
@@ -245,6 +356,17 @@ impl Capture for UiaCapture {
             started.elapsed().as_micros(),
             result.is_ok()
         );
+        if let Some((id, first, second)) = self.probe.take_pair() {
+            log::debug!(
+                "tree_collision_probe target={:?} window_handle={} shared_identity={:?} sampling=after_capture",
+                request.target.as_ref().map(|p| p.get_runtime_id()),
+                request.window_handle,
+                id
+            );
+            for (label, element) in [("first", first), ("second", second)] {
+                probe::inspect(&a, &element, label, request.deadline, cancel);
+            }
+        }
         result
     }
 }
@@ -262,7 +384,7 @@ pub(crate) fn capture_legacy(
         window_handle: root.as_ref().map_or(0, |p| p.get_handle()),
         path: root
             .as_ref()
-            .map(|p| vec![p.get_runtime_id().to_vec()])
+            .map(|p| vec![p.identity()])
             .unwrap_or_default(),
         target: root,
         kind: CaptureKind::Children,
@@ -278,6 +400,11 @@ pub(crate) fn capture_legacy(
             request.deadline,
             &cancel,
             &mut 0,
+            request
+                .target
+                .as_ref()
+                .and_then(|p| p.identity().ancestor)
+                .as_deref(),
         )?;
         if let Some(children) = &mut observation.children {
             children.retain(|c| {
