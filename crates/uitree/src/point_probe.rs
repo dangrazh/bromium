@@ -10,6 +10,7 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub(super) struct Discovery {
+    pub diagnostic_id: Option<u64>,
     pub path: Vec<ElementIdentity>,
     pub window: Option<(SaveUIElement, u32)>,
     /// Complete immediate children along the hit ancestry, never unrelated subtrees.
@@ -81,20 +82,32 @@ fn discover(
     };
     check()?;
     let automation = bromium_common::get_ui_automation_instance().map_err(|e| e.to_string())?;
+    let diagnostic = super::diagnostics::Diagnostics::new(x, y, deadline);
     check()?;
     let mut element = automation
         .element_from_point(uiautomation::types::Point::new(x, y))
         .map_err(|e| e.to_string())?;
+    if let Some(excluded) = excluded_process {
+        check()?;
+        if element.get_process_id().map_err(|e| e.to_string())? == excluded {
+            return Err("Point target belongs to excluded process".into());
+        }
+    }
+    diagnostic.element("initial_raw", &element, &automation);
     check()?;
     let walker = automation
         .get_control_view_walker()
         .map_err(|e| e.to_string())?;
     check()?;
     element = walker.normalize(&element).map_err(|e| e.to_string())?;
+    diagnostic.element("initial_control_view", &element, &automation);
+    diagnostic.focus(&automation, excluded_process);
     check()?;
     if excluded_process == Some(element.get_process_id().map_err(|e| e.to_string())?) {
         return Err("Point target belongs to excluded process".into());
     }
+    element = super::menu::reconcile(&automation, element, x, y, deadline)?;
+    diagnostic.element("initial_menu_reconciled", &element, &automation);
     let mut path = Vec::new();
     let mut elements = Vec::new();
     for depth in 0..64 {
@@ -195,7 +208,17 @@ fn discover(
                 let hit = automation
                     .element_from_point(uiautomation::types::Point::new(x, y))
                     .map_err(|e| e.to_string())?;
+                if let Some(excluded) = excluded_process {
+                    check()?;
+                    if hit.get_process_id().map_err(|e| e.to_string())? == excluded {
+                        return Err("Point verification target belongs to excluded process".into());
+                    }
+                }
+                diagnostic.element("verification_raw", &hit, &automation);
                 let hit = walker.normalize(&hit).map_err(|e| e.to_string())?;
+                diagnostic.element("verification_control_view", &hit, &automation);
+                let hit = super::menu::reconcile(&automation, hit, x, y, deadline)?;
+                diagnostic.element("verification_menu_reconciled", &hit, &automation);
                 if !path[0].matches_live(&hit) {
                     return Err("Point target changed during narrow capture".into());
                 }
@@ -207,6 +230,7 @@ fn discover(
                     path.first()
                 );
                 return Ok(Discovery {
+                    diagnostic_id: diagnostic.id,
                     path,
                     window,
                     observation,

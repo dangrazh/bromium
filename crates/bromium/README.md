@@ -31,6 +31,18 @@ native window change during the query raises `StaleTreeError`, rather than
 returning an unrelated control underneath. Menus may inherit their native owner's
 title scope; ordinary owned dialogs retain their own scope.
 
+For same-window menu overlays (including VS Code), lookup also checks the current
+focus ancestry for an exposed menu covering the point in the same native window.
+It inspects only that active menu branch, accepting any descendant control type
+(for example a checkbox), rather than trusting a provider hit on content behind
+the menu. Focus identifies the active branch, not necessarily the returned item.
+The exact focused occurrence may override a contradictory `IsOffscreen=true`
+flag inside an otherwise visible menu; this is not a global visibility override.
+Overlapping sibling targets and unstable identities fail conservatively. The
+selection is repeated before publication, within the original query deadline,
+with a 256-node menu traversal limit and 64-level ancestry/depth limits. Without
+that active-menu evidence, the existing provider/native-popup route is retained.
+
 Point lookup certifies the anchored region, not the entire desktop. It does not
 force or wait for unrelated desktop membership refreshes. For an uncached window,
 UIA ancestry can add that window without enumerating desktop siblings. This does
@@ -47,6 +59,33 @@ root handle, class and owner chain, selected cache/repair route, UIA ancestor
 identities when needed, and the final hit or failure. Provider discovery runs on
 one bounded worker; a deadline bounds the caller's wait but cannot cancel an
 individual COM call already in progress.
+
+For menu hit-testing discrepancies, Debug/Trace also emits `point_hit_probe`
+records with a per-query `query` ID:
+
+- `initial_raw` / `initial_control_view`: the original UIA hit and its normalized
+  control-view element; `verification_raw` / `verification_control_view` repeat
+  the comparison at the existing end-of-capture check.
+- `focus`: keyboard focus sampled during lookup (read-only, never moved).
+- `initial_menu_reconciled` / `verification_menu_reconciled`: the hit after active
+  menu reconciliation. `point_menu_overlay` records the active menu identity,
+  supporting focus identity and traversal count when that route is selected.
+- `cached_menu_candidate`: captured Menu/MenuItem/MenuBar entries covering the
+  cursor in the selected window, with ancestry, bounds, captured `IsOffscreen`,
+  metadata age and child coverage. These can include retained older observations.
+- `cached_menus`: scan counts and truncation, including when no candidate matches.
+
+Live records include runtime ID, name/type, handle, bounds, control-view membership,
+class/framework/provider and `IsOffscreen`. Metadata is batched through a separate
+diagnostic cache request and is never used to replace the selected element.
+Extra provider reads share a 500 ms
+cooperative diagnostic budget within the query deadline. Errors and skipped reads
+are explicit; a running COM call cannot be forcibly cancelled. The snapshot scan
+uses no provider calls, visits at most 4,096 nodes, emits at most 16 candidates,
+and has a 10 ms cooperative scan budget. `None` visibility means it was not
+captured; `IsOffscreen=false` is not proof that an element is visually unobscured.
+This instrumentation does not select candidates, refresh menu branches, or change
+cursor-tracking behaviour. It is disabled below Debug level.
 
 
 

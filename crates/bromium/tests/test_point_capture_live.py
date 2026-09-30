@@ -40,9 +40,17 @@ class PointCaptureLiveTests(unittest.TestCase):
                 [str(probe), ready["titles"][0], str((rect.left + rect.right) // 2),
                  str((rect.top + rect.bottom) // 2), "Before"],
                 capture_output=True, text=True, timeout=40, creationflags=subprocess.CREATE_NO_WINDOW,
+                env={**os.environ, "BROMIUM_POINT_DIAGNOSTICS": "1"},
             )
             print(result.stdout)
             self.assertEqual(result.returncode, 0, result.stderr)
+            for stage in ("initial_raw", "initial_control_view", "focus",
+                          "initial_menu_reconciled", "verification_raw",
+                          "verification_control_view", "verification_menu_reconciled",
+                          "cached_menus"):
+                self.assertIn(f"stage={stage}", result.stderr)
+            self.assertIn("point_hit_probe query=", result.stderr)
+            print(result.stderr)
         finally:
             if fixture.poll() is None:
                 try:

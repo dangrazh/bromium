@@ -7,6 +7,10 @@ use windows::Win32::{
         GA_ROOT, GW_OWNER, GetAncestor, GetClassNameW, GetWindow, WindowFromPoint,
     },
 };
+#[path = "point_diagnostics.rs"]
+mod diagnostics;
+#[path = "point_menu.rs"]
+mod menu;
 #[path = "point_probe.rs"]
 mod probe;
 
@@ -165,6 +169,7 @@ fn resolve_point_with(
     let (epoch, _) = service.point_capture_context();
     log::debug!("point_lookup route=narrow_uia_spine native={:?}", native);
     let discovery = ancestry().map_err(|e| stale(service, title, e))?;
+    let diagnostic_id = discovery.diagnostic_id;
     if native_read().as_ref() != Some(&native) {
         return Err(stale(
             service,
@@ -196,6 +201,7 @@ fn resolve_point_with(
     if !in_scope(&tree, id, &native, title) {
         return Ok(None);
     }
+    diagnostics::snapshot(&tree, id, _x, _y, diagnostic_id);
     Ok(Some((tree, id)))
 }
 
@@ -279,6 +285,7 @@ mod tests {
             .properties
             .identity();
         let discovery = probe::Discovery {
+            diagnostic_id: None,
             path: vec![target, desktop.properties.identity()],
             window: Some((window.properties.clone(), 456)),
             observation,

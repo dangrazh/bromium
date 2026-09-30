@@ -2,7 +2,25 @@
 //! Arguments: fixture window title, x, y, expected control name.
 use std::time::{Duration, Instant};
 
+struct PointLogger;
+impl log::Log for PointLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Debug
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        if record.target().ends_with("point::diagnostics") {
+            eprintln!("{}", record.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var_os("BROMIUM_POINT_DIAGNOSTICS").is_some() {
+        static LOGGER: PointLogger = PointLogger;
+        log::set_logger(&LOGGER).expect("install fixture diagnostic logger");
+        log::set_max_level(log::LevelFilter::Debug);
+    }
     let args: Vec<_> = std::env::args().collect();
     let title = args.get(1).ok_or("missing fixture title")?;
     let x = args.get(2).ok_or("missing x")?.parse()?;

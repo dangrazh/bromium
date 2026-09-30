@@ -48,8 +48,8 @@ def br_init():
 
 def add_hotkey():
     u.log("Adding hotkey for retrieving XPath...")
-    keyboard.add_hotkey('ctrl+alt+q', br_get_xpath)
-    print("Press Ctrl + Alt + q to retrieve XPath.\n")
+    keyboard.add_hotkey('ctrl+shift+q', br_get_xpath)
+    print("Press Ctrl + Shift + q to retrieve XPath.\n")
     keyboard.wait()
         
 def Exlite():

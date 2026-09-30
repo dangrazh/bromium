@@ -123,6 +123,8 @@ pub struct SaveUIElement {
     level: usize,
     z_order: usize,
     xpath: Option<String>,
+    /// Diagnostic metadata only; never used for selection or identity.
+    pub(crate) diagnostic_offscreen: Option<Result<bool, String>>,
 }
 
 impl SaveUIElement {
@@ -199,6 +201,7 @@ impl SaveUIElement {
             level,
             z_order,
             xpath: None,
+            diagnostic_offscreen: None,
         }
     }
 
@@ -289,6 +292,8 @@ impl SaveUIElement {
             level: 0,
             z_order: 0,
             xpath: None,
+            diagnostic_offscreen: log::log_enabled!(log::Level::Debug)
+                .then(|| element.is_cached_offscreen().map_err(|e| e.to_string())),
         })
     }
 
@@ -405,6 +410,7 @@ impl Default for SaveUIElement {
             level: 0,
             z_order: 0,
             xpath: None,
+            diagnostic_offscreen: None,
         }
     }
 }

@@ -271,6 +271,9 @@ pub(crate) fn cache_request(a: &UIAutomation) -> Result<UICacheRequest, String> 
     }
     if log::log_enabled!(log::Level::Debug) {
         cache
+            .add_property(UIProperty::IsOffscreen)
+            .map_err(|e| e.to_string())?;
+        cache
             .add_property(UIProperty::ProviderDescription)
             .map_err(|e| e.to_string())?;
     }
