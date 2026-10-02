@@ -57,6 +57,7 @@ fn bromium(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(logging::py_enable_console_logging, m)?)?;
     m.add_function(wrap_pyfunction!(logging::py_enable_file_logging, m)?)?;
     m.add_function(wrap_pyfunction!(logging::py_reset_log_file, m)?)?;
+    m.add_function(wrap_pyfunction!(logging::py_log, m)?)?;
 
     Ok(())
 }

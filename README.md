@@ -131,6 +131,10 @@ cargo run -p uiexplore --bin uiexplore --release
 
 UI Explore loads and repairs the tree in the background. Desktop access is
 subject to Windows session, privilege, and provider restrictions.
+Cursor tracking performs bounded, popup-aware point queries. Stopping tracking
+freezes the displayed snapshot for inspection; resume tracking or press Refresh
+to see current state again. The paused view is explicitly labelled and does not
+stop Rust's live-cache maintenance. See the [UI Explore guide](crates/uiexplore/README.md).
 
 Python coordinate lookup and UI Explore (with Simple XPath off) prefer unique
 window-scoped named locators, avoiding transient intermediate pane positions.

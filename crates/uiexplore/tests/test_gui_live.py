@@ -38,6 +38,11 @@ class ExplorerLiveTests(unittest.TestCase):
         user.GetAncestor.restype = w.HWND
         user.SetWindowTextW.argtypes = [w.HWND, w.LPCWSTR]
         user.SetWindowPos.argtypes = [w.HWND, w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.UINT]
+        user.GetWindowRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
+        user.GetCursorPos.argtypes = [c.POINTER(w.POINT)]
+        user.SetCursorPos.argtypes = [c.c_int, c.c_int]
+        original_cursor = w.POINT()
+        restore_cursor = bool(user.GetCursorPos(c.byref(original_cursor)))
         user.ScreenToClient.argtypes = [w.HWND, c.POINTER(w.POINT)]
         user.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
         user.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT, w.UINT, c.POINTER(c.c_size_t)]
@@ -62,7 +67,7 @@ class ExplorerLiveTests(unittest.TestCase):
                 log_path = Path(temp) / "app.log"
                 with log_path.open("w", encoding="utf-8") as log, ExitStack() as cleanup:
                     app = subprocess.Popen([str(exe)], stdout=log, stderr=log,
-                                           env={**os.environ, "RUST_LOG": "uitree=debug"},
+                                           env={**os.environ, "RUST_LOG": "uitree=debug,uiexplore=debug"},
                                            creationflags=subprocess.CREATE_NO_WINDOW)
                     def stop_app():
                         if app.poll() is None:
@@ -176,9 +181,61 @@ class ExplorerLiveTests(unittest.TestCase):
                     self.assertLessEqual(len(fixture_captures), 4,
                                          "Repeated collapse/reopen recaptured unchanged fixture contents")
                     print(f"GUI PASS: nodes {first_count}->{final_count}, revision {first_revision}->{final_revision}", flush=True)
+
+                    def control(name):
+                        return next((e for e in elements() if e.name == name), None)
+
+                    def point_at_control(element):
+                        left, top, right, bottom = element.bounding_rectangle
+                        self.assertTrue(user.SetCursorPos((left + right) // 2, (top + bottom) // 2))
+
+                    # The only physical cursor movements in this test are over the
+                    # owned inspector/fixture, restored on exit. Never click user apps.
+                    toggle = wait_for(lambda: control("Track Cursor"), "tracking checkbox")
+                    point_at_control(toggle)
+                    click(toggle)
+                    self.assertTrue(user.SetWindowPos(fixture_window, -1, 80, 180, 420, 280, 0x0050))
+                    button_rect = w.RECT()
+                    self.assertTrue(user.GetWindowRect(ready["button"], c.byref(button_rect)))
+                    self.assertTrue(user.SetCursorPos((button_rect.left + button_rect.right) // 2,
+                                                     (button_rect.top + button_rect.bottom) // 2))
+                    wait_for(lambda: control("Before"), "point-selected button details", seconds=25)
+                    tracking_offset = len(log_path.read_text(encoding="utf-8", errors="replace"))
+                    for _ in range(3):
+                        time.sleep(1)
+                        responsive()
+                    tracking_log = log_path.read_text(encoding="utf-8", errors="replace")[tracking_offset:]
+                    requests = re.findall(r"cursor_tracking request", tracking_log)
+                    self.assertLessEqual(len(requests), 4, "stationary pointer caused a capture storm")
+
+                    toggle = wait_for(lambda: control("Track Cursor"), "stop tracking checkbox")
+                    point_at_control(toggle)
+                    click(toggle)
+                    frozen = wait_for(lambda: row("Paused snapshot"), "explicit paused snapshot label")
+                    frozen_label = frozen.name
+                    self.assertIsNotNone(control("Before"), "stopping tracking cleared the last hit")
+                    fixture.stdin.write('{"command":"rename"}\n')
+                    fixture.stdin.flush()
+                    responses = queue.Queue()
+                    threading.Thread(target=lambda: responses.put(fixture.stdout.readline()), daemon=True).start()
+                    self.assertEqual(json.loads(responses.get(timeout=5))["done"], "rename")
+                    for _ in range(3):
+                        time.sleep(0.5)
+                        rows = elements()
+                        self.assertTrue(any(e.name == frozen_label for e in rows), "background commit replaced frozen revision")
+                        self.assertTrue(any(e.name == "Before" for e in rows), "background update changed frozen details")
+                        self.assertFalse(any(e.name == "After" for e in rows))
+                        responsive()
+
+                    click(wait_for(lambda: control("🔄"), "refresh frozen snapshot"))
+                    wait_for(lambda: control("After"), "refreshed current button details")
+                    self.assertFalse(any(e.name.startswith("Paused snapshot") for e in elements()))
+                    print(f"TRACKING PASS: {len(requests)} requests in 3s; freeze, retained details and refresh verified", flush=True)
                     app.terminate()
                     app.wait(timeout=5)
         finally:
+            if restore_cursor:
+                user.SetCursorPos(original_cursor.x, original_cursor.y)
             if app is not None and app.poll() is None:
                 app.terminate()
                 app.wait(timeout=5)

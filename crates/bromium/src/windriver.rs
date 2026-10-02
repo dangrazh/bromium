@@ -125,6 +125,12 @@ impl Bromium {
     pub fn reset_log_file() -> PyResult<()> {
         logging::reset_log_file()
     }
+
+    #[staticmethod]
+    #[pyo3(signature = (message))]
+    pub fn log(message: &str) -> PyResult<()> {
+        logging::py_log(message)
+    }
 }
 
 #[pyclass]

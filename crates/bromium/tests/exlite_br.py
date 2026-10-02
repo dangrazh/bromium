@@ -1,3 +1,5 @@
+from platform import system
+
 import bromium
 import keyboard
 import parutils as u
@@ -5,6 +7,29 @@ from bromium import Element, WinDriver
 from parutils import wrap
 
 driver: WinDriver = None
+
+tests = [
+    "Notepad - File menu -> New",
+    "Notepad - Settings button",
+    "Explorer - New -> Folder",
+    "Explorer - context menu -> New -> Folder",
+    "Excel - Cell A2",
+    "Excel - Data tab -> Sort & Filter -> Filter",
+    "Excel - Toolbar -> Save button",
+    "VS Code - File menu -> New File...",
+    ]
+test_iterator = iter(tests)
+
+def br_announce_next_test():
+    try:
+        test = next(test_iterator)
+        print(f"Next test: {test}")
+        bromium.log(f"Next test: {test}")
+    except StopIteration:
+        print("No more tests available.")
+        bromium.log("No more tests available.")
+        # end the program gracefully
+        system.exit(0)
 
 def br_get_xpath():
     print("Retrieving XPath of the element under the cursor...")
@@ -46,16 +71,18 @@ def br_init():
 
     return driver
 
-def add_hotkey():
+def add_hotkeys():
     u.log("Adding hotkey for retrieving XPath...")
     keyboard.add_hotkey('ctrl+shift+q', br_get_xpath)
-    print("Press Ctrl + Shift + q to retrieve XPath.\n")
+    print("Press Ctrl + Shift + q to retrieve XPath.")
+    keyboard.add_hotkey('ctrl+alt+n', br_announce_next_test)
+    print("Press Ctrl + Alt + n to announce the next test.")
     keyboard.wait()
         
 def Exlite():
     global driver
     driver = br_init()
-    add_hotkey()
+    add_hotkeys()
     print()
 
 

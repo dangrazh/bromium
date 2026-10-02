@@ -13,6 +13,7 @@ mod border_window;
 mod commons;
 
 mod app_ui;
+mod cursor_tracking;
 use app_ui::UIExplorer;
 
 use uitree::UITreeXML;

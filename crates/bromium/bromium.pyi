@@ -118,6 +118,10 @@ def reset_log_file() -> None:
     """Truncate the current file; ValueError if none is set, OSError on I/O failure."""
     ...
 
+def log(message: str) -> None:
+    """Log a message at the INFO level."""
+    ...
+    
 # ─── Element ──────────────────────────────────────────────────────────────────
 
 class Element:

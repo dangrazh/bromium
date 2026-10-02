@@ -10,6 +10,7 @@ use eframe::egui;
 use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
+use crate::cursor_tracking::{CursorTracking, POLL_INTERVAL, Pointer};
 #[allow(unused)]
 use crate::{AppContext, border_window::BorderWindow};
 use uitree::{SaveUIElementXML, UITreeXML};
@@ -24,7 +25,13 @@ mod tree_render_tests {
         let tree = UITreeXML::empty();
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                UIExplorer::render_ui_tree_recursive(ui, &tree, tree.root(), &mut TreeState::new());
+                UIExplorer::render_ui_tree_recursive(
+                    ui,
+                    &tree,
+                    tree.root(),
+                    &mut TreeState::new(),
+                    false,
+                );
             });
         });
         fn contains_root(shape: &egui::epaint::Shape) -> bool {
@@ -63,7 +70,14 @@ mod tree_render_tests {
                     state.path_to_active_ui_element = Some(vec![tree.root()]);
                     state.reveal_selection = true;
                     header_id = Some(
-                        UIExplorer::render_ui_tree_recursive(ui, &tree, tree.root(), &mut state).id,
+                        UIExplorer::render_ui_tree_recursive(
+                            ui,
+                            &tree,
+                            tree.root(),
+                            &mut state,
+                            false,
+                        )
+                        .id,
                     );
                 });
             });
@@ -72,6 +86,22 @@ mod tree_render_tests {
                 if open { vec![tree.root()] } else { vec![] }
             );
         }
+    }
+
+    #[test]
+    fn paused_tree_expansion_does_not_request_live_capture() {
+        let ctx = egui::Context::default();
+        let tree = UITreeXML::empty();
+        let mut state = TreeState::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                UIExplorer::render_ui_tree_recursive(ui, &tree, tree.root(), &mut state, true);
+            });
+        });
+        assert!(
+            state.pending_expansions.is_empty(),
+            "paused inspection requested fresh children"
+        );
     }
 }
 
@@ -105,11 +135,12 @@ impl TreeState {
             .is_none_or(|current| new_active_element.identity() != current.identity());
 
         if is_new {
-            self.active_element = Some(new_active_element);
-            self.active_ui_element = Some(new_active_ui_element);
             self.refresh_path_to_active_ui_element = true;
             self.reveal_selection = true;
         }
+        // A stable identity can still have changed properties in a new snapshot.
+        self.active_element = Some(new_active_element);
+        self.active_ui_element = Some(new_active_ui_element);
     }
 
     fn update_path_to_active_ui_element(&mut self, ui_tree: &UITreeXML) {
@@ -156,13 +187,6 @@ impl AppStatusMsg {
             status_msg: msg,
             expiry: Some(expiry),
         }
-    }
-
-    fn has_display_duration(&self) -> bool {
-        if let Some(_exp) = self.expiry {
-            return true;
-        }
-        false
     }
 
     fn is_expired(&self) -> bool {
@@ -247,7 +271,8 @@ enum DisplayMode {
 // #[allow(dead_code)]
 pub struct UIExplorer {
     app_context: AppContext,
-    recording: bool,
+    tracking: CursorTracking,
+    background_waker_enabled: Option<bool>,
     show_history: bool,
     highlighting: bool,
     simple_xpath: bool,
@@ -262,10 +287,7 @@ pub struct UIExplorer {
     display_mode: DisplayMode,
     service: uitree::TreeService,
     pending_query: Option<(String, Receiver<Result<UITreeXML, uitree::StaleTree>>)>,
-    pending_point: Option<(
-        (i32, i32),
-        Receiver<Result<Option<(UITreeXML, usize)>, uitree::StaleTree>>,
-    )>,
+    pending_point: Option<Receiver<Result<Option<(UITreeXML, usize)>, uitree::StaleTree>>>,
     evaluated_xpath: Option<String>,
     border_window: Option<BorderWindow>,
 }
@@ -288,7 +310,8 @@ impl UIExplorer {
 
         Self {
             app_context,
-            recording: false,
+            tracking: CursorTracking::default(),
+            background_waker_enabled: None,
             show_history: false,
             highlighting: false,
             simple_xpath: false,
@@ -312,7 +335,13 @@ impl UIExplorer {
     #[inline(always)]
     fn render_ui_tree(&mut self, ui: &mut egui::Ui, state: &mut TreeState) {
         let tree = &self.ui_tree;
-        Self::render_ui_tree_recursive(ui, tree, tree.root(), state);
+        Self::render_ui_tree_recursive(
+            ui,
+            tree,
+            tree.root(),
+            state,
+            !self.tracking.follows_background(),
+        );
         if !state.refresh_path_to_active_ui_element {
             state.reveal_selection = false;
         }
@@ -327,6 +356,7 @@ impl UIExplorer {
         tree: &UITreeXML,
         idx: usize,
         state: &mut TreeState,
+        paused: bool,
     ) -> egui::Response {
         let (name, element) = tree.node(idx);
         let selected = state.active_ui_element == Some(idx);
@@ -358,15 +388,20 @@ impl UIExplorer {
             .show_background(selected)
             .show(ui, |ui| {
                 if !observed {
-                    ui.label("Loading children…");
+                    ui.label(if paused {
+                        "Not captured in this snapshot — press Refresh to load."
+                    } else {
+                        "Loading children…"
+                    });
                 }
                 for &child in tree.children(idx) {
-                    Self::render_ui_tree_recursive(ui, tree, child, state);
+                    Self::render_ui_tree_recursive(ui, tree, child, state, paused);
                 }
             });
         // egui also renders the body during the closing animation. Only the actual
         // open state should request capture, not the presence of an animated body.
-        if !observed
+        if !paused
+            && !observed
             && egui::collapsing_header::CollapsingState::load(ui.ctx(), response.header_response.id)
                 .is_some_and(|collapse| collapse.is_open())
         {
@@ -419,7 +454,7 @@ impl UIExplorer {
     }
 
     #[inline(always)]
-    fn render_options_bar(&mut self, ctx: &egui::Context, state: &mut TreeState) {
+    fn render_options_bar(&mut self, ctx: &egui::Context) {
         // options bar
         egui::TopBottomPanel::top("top_panel").resizable(true).show(ctx, |ui| {
 
@@ -430,7 +465,7 @@ impl UIExplorer {
 
                 for event in &i.raw.events {
 
-                    if !self.recording && matches!(
+                    if !self.tracking.is_tracking() && matches!(
                         event,
                         egui::Event::PointerMoved { .. }
                             | egui::Event::MouseMoved { .. }
@@ -449,14 +484,21 @@ impl UIExplorer {
                     }
 
                     // update the actual active element
-                    self.process_event(event, state);
+                    self.process_event(event);
                 }
             });
 
             // render the ui elements
             ui.horizontal(|ui| {
 
-                ui.label(self.service.status());
+                if self.tracking.is_paused() {
+                    ui.label(format!("Paused snapshot — revision {} (not live)", self.ui_tree.revision()));
+                } else if self.tracking.is_tracking() {
+                    ui.label(format!("Captured revision {} — {}", self.ui_tree.revision(),
+                        if self.tracking.has_pending() { "updating; showing previous capture" } else { "tracking cursor" }));
+                } else {
+                    ui.label(self.service.status());
+                }
                 ui.label("Mode: ");
                 ui.radio_value(&mut self.display_mode, DisplayMode::Explore, "Explore");
                 ui.radio_value(&mut self.display_mode, DisplayMode::XpathTest, "Test Xpath");
@@ -466,6 +508,11 @@ impl UIExplorer {
 
                 match self.display_mode {
                     DisplayMode::XpathTest => {
+
+                        if self.tracking.is_tracking() { self.set_tracking(false); }
+                        if self.tracking.is_paused() && ui.button("Refresh / live view").clicked() {
+                            self.app_mode = AppMode::NeedsTreeRefresh;
+                        }
 
                         ui.add_space(2.0);
                         ui.label(" | ");
@@ -482,8 +529,8 @@ impl UIExplorer {
                         ui.label(" | ");
                         ui.add_space(2.0);
 
-                        ui.label("Incremental updates active");
-                        if ui.button("🔄").on_hover_text("Refresh selected region (or desktop membership)").clicked() {
+                        ui.label(if self.tracking.follows_background() { "Incremental updates active" } else { "Captured view" });
+                        if ui.button("🔄").on_hover_text("Resume the live view and refresh the selected region (or desktop membership)").clicked() {
                             self.app_mode = AppMode::NeedsTreeRefresh;
                         }
                         ui.add_space(2.0);
@@ -497,8 +544,11 @@ impl UIExplorer {
                         ui.add_space(2.0);
 
                         ui.checkbox(&mut self.highlighting, "Show Highlight Rectangle");
-                        ui.checkbox(&mut self.recording, "Track Cursor").on_hover_text("When enabled, the element under the mouse cursor is automatically selected. Press Escape to disable tracking.");
-                        if self.recording {
+                        let mut recording = self.tracking.is_tracking();
+                        if ui.checkbox(&mut recording, "Track Cursor").on_hover_text("Follow the cursor using bounded point capture. Uncheck to freeze the displayed snapshot. Escape also pauses while UI Explore has keyboard focus.").changed() {
+                            self.set_tracking(recording);
+                        }
+                        if self.tracking.is_tracking() {
                             ui.checkbox(&mut self.show_history, "Show Event History");
                         }
 
@@ -668,7 +718,11 @@ impl UIExplorer {
         let input = self.xpath_input.get_or_insert_with(String::new);
         let mut submit = None;
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label("XPath (queries wait up to 5 seconds for relevant cached coverage)");
+            ui.label(if self.tracking.is_paused() {
+                "XPath against paused snapshot only — results may no longer exist on the desktop"
+            } else {
+                "XPath (queries wait up to 5 seconds for relevant cached coverage)"
+            });
             let response = ui.text_edit_singleline(input);
             if response.changed() {
                 self.xpath_eval_result = None;
@@ -711,21 +765,30 @@ impl UIExplorer {
                 ));
                 return;
             }
-            let service = self.service.clone();
-            let (tx, rx) = channel();
-            let wake = ctx.clone();
-            let query = expr.clone();
-            thread::spawn(move || {
-                let result = service.ensure_query(
-                    &query,
-                    None,
-                    std::time::Instant::now() + std::time::Duration::from_secs(5),
-                );
-                let _ = tx.send(result);
-                wake.request_repaint();
-            });
-            self.pending_query = Some((expr, rx));
-            self.xpath_eval_result = None;
+            if self.tracking.is_paused() {
+                self.xpath_eval_result = Some(xpath_eval::eval_xpath(
+                    &format!("({expr})/@RtID"),
+                    self.ui_tree.get_xml_dom_tree(),
+                ));
+                self.evaluated_xpath = Some(expr);
+                ctx.request_repaint();
+            } else {
+                let service = self.service.clone();
+                let (tx, rx) = channel();
+                let wake = ctx.clone();
+                let query = expr.clone();
+                thread::spawn(move || {
+                    let result = service.ensure_query(
+                        &query,
+                        None,
+                        std::time::Instant::now() + std::time::Duration::from_secs(5),
+                    );
+                    let _ = tx.send(result);
+                    wake.request_repaint();
+                });
+                self.pending_query = Some((expr, rx));
+                self.xpath_eval_result = None;
+            }
         }
         if let Some((expr, rx)) = &self.pending_query {
             match rx.try_recv() {
@@ -773,11 +836,8 @@ impl UIExplorer {
     }
 
     #[inline(always)]
-    fn process_event(&mut self, event: &egui::Event, state: &mut TreeState) {
+    fn process_event(&mut self, event: &egui::Event) {
         match event {
-            egui::Event::MouseMoved { .. } => {
-                self.track_point(state);
-            }
             egui::Event::Key {
                 key: egui::Key::Escape,
                 pressed: false,
@@ -787,9 +847,8 @@ impl UIExplorer {
                 // log::debug!("Key event received: {:?}, pressed: {}", key, pressed);
                 // check if tracking is enabled, if yes, desable tracking
                 // if not, ignore the escape key
-                if self.recording {
-                    self.recording = false;
-                    self.set_status("Tracking disabled".to_string(), Duration::seconds(2));
+                if self.tracking.is_tracking() {
+                    self.set_tracking(false);
                 } else {
                     self.set_status(
                         "No tracking active, ignoring Escape key".to_string(),
@@ -801,84 +860,136 @@ impl UIExplorer {
         }
     }
 
-    #[inline(always)]
-    fn track_point(&mut self, state: &mut TreeState) {
+    fn set_tracking(&mut self, enabled: bool) {
+        self.tracking.set_tracking(enabled);
+        self.pending_query = None;
+        if !enabled {
+            if let Some(border) = &self.border_window {
+                border.hide();
+            }
+            self.set_status(
+                "Snapshot paused — resume tracking or press Refresh for current state".into(),
+                Duration::seconds(5),
+            );
+        } else {
+            self.clear_status();
+        }
+    }
+
+    fn cursor_target() -> Option<Pointer> {
         let mut point = POINT::default();
         if unsafe { GetCursorPos(&mut point) }.is_err() {
-            return;
+            return None;
         }
-        let position = (point.x, point.y);
-        if let Some(region) = uitree::window_at_point(point.x, point.y)
-            .and_then(|handle| uitree::cached_region(&self.ui_tree, handle))
-            && let Ok(tree) = self
-                .service
-                .ensure_region(region, std::time::Instant::now())
-            && tree.revision() == self.ui_tree.revision()
-            && let Some(hit) = uitree::element_at_point(&tree, point.x, point.y)
-        {
-            state.update_state(hit.get_element_props().clone(), hit.get_tree_index());
-            return;
+        let window = uitree::window_at_point(point.x, point.y)?;
+        let mut process = 0;
+        // SAFETY: read-only ownership check before any provider work.
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                windows::Win32::Foundation::HWND(window as *mut _),
+                Some(&mut process),
+            );
         }
-        if let Some((requested, rx)) = &self.pending_point {
+        (process != 0 && process != std::process::id()).then_some(Pointer {
+            x: point.x,
+            y: point.y,
+            window,
+        })
+    }
+
+    fn display_snapshot(&mut self, tree: UITreeXML, target: Option<usize>, state: &mut TreeState) {
+        let target = target.or_else(|| {
+            state
+                .active_element
+                .as_ref()
+                .and_then(|p| tree.index_for_identity(&p.identity()))
+        });
+        if let Some(id) = target {
+            state.update_state(tree.node(id).1.clone(), id);
+            state.refresh_path_to_active_ui_element = true;
+        } else {
+            *state = TreeState::new();
+            if let Some(border) = &self.border_window {
+                border.hide();
+            }
+        }
+        self.ui_tree = tree;
+        self.xpath_eval_result = None;
+        self.evaluated_xpath = None;
+        self.xpath_highlighting = false;
+    }
+
+    fn poll_tracking(&mut self, ctx: &egui::Context, state: &mut TreeState) {
+        let now = std::time::Instant::now();
+        let pointer = self
+            .tracking
+            .is_tracking()
+            .then(Self::cursor_target)
+            .flatten();
+        self.tracking.observe(pointer, now);
+        if let Some(rx) = &self.pending_point {
             match rx.try_recv() {
                 Ok(result) => {
-                    let matching = *requested == position;
                     self.pending_point = None;
-                    if matching {
+                    let accepted = self.tracking.complete(now);
+                    log::debug!("cursor_tracking completion accepted={accepted}");
+                    if accepted {
                         match result {
-                            Ok(Some((tree, id))) if tree.revision() == self.service.revision() => {
-                                state.update_state(tree.node(id).1.clone(), id);
-                                self.ui_tree = tree;
-                                return;
+                            Ok(Some((tree, id))) => {
+                                // This is a coherent published point snapshot. An unrelated
+                                // newer service revision does not invalidate the capture.
+                                self.display_snapshot(tree, Some(id), state);
+                                self.clear_status();
                             }
                             Err(error) => self.set_status(error.to_string(), Duration::seconds(5)),
-                            _ => {}
+                            Ok(None) => self.set_status(
+                                "No point target — showing previous capture".into(),
+                                Duration::seconds(2),
+                            ),
                         }
                     }
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pending_point = None,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.pending_point = None;
+                    if self.tracking.complete(now) {
+                        self.set_status(
+                            "Point worker disconnected — showing previous capture".into(),
+                            Duration::seconds(5),
+                        );
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
-        if self.pending_point.is_none() {
-            if let Some(handle) = uitree::window_at_point(point.x, point.y) {
-                let mut process = 0;
-                // SAFETY: read-only ownership check avoids inspecting our own UIA provider.
-                unsafe {
-                    windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
-                        windows::Win32::Foundation::HWND(handle as *mut _),
-                        Some(&mut process),
-                    );
-                }
-                if process == std::process::id() {
-                    return;
-                }
-            }
+        if let Some(position) = self.tracking.request(now) {
+            log::debug!(
+                "cursor_tracking request x={} y={} window={}",
+                position.x,
+                position.y,
+                position.window
+            );
             let service = self.service.clone();
             let (tx, rx) = channel();
+            let wake = ctx.clone();
             thread::spawn(move || {
                 let result = uitree::resolve_point(
                     &service,
-                    position.0,
-                    position.1,
+                    position.x,
+                    position.y,
                     None,
                     std::time::Instant::now() + std::time::Duration::from_secs(5),
                 );
                 let _ = tx.send(result);
+                wake.request_repaint();
             });
-            self.pending_point = Some((position, rx));
-        }
-        state.active_element = None;
-        state.active_ui_element = None;
-        if let Some(border) = &self.border_window {
-            border.hide();
+            self.pending_point = Some(rx);
         }
     }
 
     #[inline(always)]
     fn process_highlighting(&mut self, state: &TreeState) {
         if let Some(border) = &self.border_window {
-            if self.highlighting {
+            if self.highlighting && !self.tracking.is_paused() && !self.tracking.has_pending() {
                 if let Some(active_element) = &state.active_element {
                     let bounds = active_element.get_bounding_rectangle();
                     let rect = RECT {
@@ -907,63 +1018,40 @@ impl UIExplorer {
 
 impl eframe::App for UIExplorer {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let wake = ctx.clone();
-        self.service.set_waker(move || wake.request_repaint());
         // Take ownership of the TreeState to avoid cloning every frame.
         // It is stored back into self.tree_state at the end of update().
         let mut state = self.tree_state.take().unwrap_or_else(TreeState::new);
 
-        if state.refresh_path_to_active_ui_element {
-            state.update_path_to_active_ui_element(&self.ui_tree);
-            // println!("Path to active ui element {:?} set to : {:?}", state.active_ui_element,  state.path_to_active_ui_element);
-        }
-
-        // manage the AppStatusMsg lifecycle
-        if let Some(status_msg) = &self.status_msg {
-            if status_msg.is_expired() {
-                self.clear_status();
-            } else if status_msg.has_display_duration() {
-                // switch from reactive mode to continuous mode to
-                // ensure the status messages is cleared after the
-                // specified time, even if there is no event triggered
-                ctx.request_repaint();
-            }
-        }
-
-        // Polling is bounded and independent of pointer activity; queries additionally
-        // wake the GUI on completion. Only committed revisions are rendered.
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        // Handle pause before applying any results or background publications.
+        self.render_options_bar(ctx);
         if matches!(self.app_mode, AppMode::NeedsTreeRefresh) {
+            self.tracking.refresh();
+            self.pending_query = None;
+            self.clear_status();
+            self.display_snapshot(self.service.snapshot(), None, &mut state);
             self.service
-                .request_region(state.active_ui_element.unwrap_or(0));
+                .request_region(state.active_ui_element.unwrap_or(self.ui_tree.root()));
             self.app_mode = AppMode::Normal;
         }
-        if self.service.revision() != self.ui_tree.revision() {
-            let current = self.service.snapshot();
-            let selected = state.active_element.as_ref().map(|p| p.identity());
-            self.ui_tree = current;
-            self.xpath_eval_result = None;
-            self.evaluated_xpath = None;
-            self.xpath_highlighting = false;
-            if let Some(id) = selected.and_then(|id| self.ui_tree.index_for_identity(&id)) {
-                state.active_element = Some(self.ui_tree.node(id).1.clone());
-                state.active_ui_element = Some(id);
-                state.refresh_path_to_active_ui_element = true;
+        let background = self.tracking.follows_background();
+        if self.background_waker_enabled != Some(background) {
+            if background {
+                let wake = ctx.clone();
+                self.service.set_waker(move || wake.request_repaint());
             } else {
-                state = TreeState::new();
-                if let Some(border) = &self.border_window {
-                    border.hide();
-                }
+                // The live cache continues repairing, but cannot drive a frozen
+                // view (or repeatedly repaint a point-tracking snapshot).
+                self.service.set_waker(|| {});
             }
+            self.background_waker_enabled = Some(background);
         }
-        if self.recording {
-            self.track_point(&mut state);
+        if background && self.service.revision() != self.ui_tree.revision() {
+            self.display_snapshot(self.service.snapshot(), None, &mut state);
         }
-
-        // Rendering the ui
-
-        // options bar
-        self.render_options_bar(ctx, &mut state);
+        self.poll_tracking(ctx, &mut state);
+        if state.refresh_path_to_active_ui_element {
+            state.update_path_to_active_ui_element(&self.ui_tree);
+        }
 
         // status bar
         self.render_status_bar(ctx);
@@ -984,6 +1072,27 @@ impl eframe::App for UIExplorer {
             }
         }
 
+        // Poll native cursor position, not provider state, at a bounded rate.
+        // Worker completions also wake us, including a worker stopped by Pause.
+        if self.tracking.is_tracking()
+            || background
+            || self.pending_point.is_some()
+            || self.pending_query.is_some()
+        {
+            ctx.request_repaint_after(POLL_INTERVAL);
+        }
+        if let Some(status) = &self.status_msg {
+            if status.is_expired() {
+                self.clear_status();
+                ctx.request_repaint(); // one repaint to remove the expired text
+            } else if let Some(expiry) = status.expiry {
+                ctx.request_repaint_after(
+                    (expiry - DateTime::now_utc())
+                        .try_into()
+                        .unwrap_or_default(),
+                );
+            }
+        }
         // finally update the state
         self.tree_state = Some(state);
     }

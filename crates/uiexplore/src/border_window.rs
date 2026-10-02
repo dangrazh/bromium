@@ -5,7 +5,7 @@
 //! instantaneous (just a `SetWindowPos`) and cleanup is automatic — destroying
 //! the window removes all on-screen artefacts with no `InvalidateRect` hacks.
 
-use std::sync::OnceLock;
+use std::{cell::Cell, sync::OnceLock};
 
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -13,11 +13,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
-    DestroyWindow, GetClientRect, HWND_TOPMOST, LWA_COLORKEY, RegisterClassW,
-    SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SetLayeredWindowAttributes,
-    SetWindowPos, ShowWindow, WNDCLASSW, WM_DESTROY, WM_PAINT,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    GetClientRect, HWND_TOPMOST, LWA_COLORKEY, RegisterClassW, SW_HIDE, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowPos, ShowWindow, WM_DESTROY, WM_PAINT,
+    WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 /// The colour key used for full transparency (magenta — unlikely to collide
@@ -49,6 +48,7 @@ static CLASS_REGISTERED: OnceLock<u16> = OnceLock::new();
 /// * On [`Drop`] — destroys the Win32 window, cleaning up all artefacts.
 pub struct BorderWindow {
     hwnd: HWND,
+    shown_rect: Cell<Option<(i32, i32, i32, i32)>>,
 }
 
 impl BorderWindow {
@@ -80,20 +80,31 @@ impl BorderWindow {
             SetLayeredWindowAttributes(hwnd, TRANSPARENT_KEY, 0, LWA_COLORKEY)?;
         }
 
-        Ok(Self { hwnd })
+        Ok(Self {
+            hwnd,
+            shown_rect: Cell::new(None),
+        })
     }
 
     /// Move and resize the border to surround `rect`, making it visible.
     ///
     /// `rect` uses raw screen coordinates (not DPI-scaled).
     pub fn update(&self, rect: RECT) {
+        let bounds = (rect.left, rect.top, rect.right, rect.bottom);
+        if self.shown_rect.get() == Some(bounds) {
+            return;
+        }
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
+        if width <= 0 || height <= 0 {
+            self.hide();
+            return;
+        }
 
         // SWP_NOACTIVATE keeps focus on the application being inspected.
         // SWP_SHOWWINDOW makes the overlay visible if it was hidden.
         unsafe {
-            let _ = SetWindowPos(
+            if SetWindowPos(
                 self.hwnd,
                 Some(HWND_TOPMOST),
                 rect.left,
@@ -101,12 +112,19 @@ impl BorderWindow {
                 width,
                 height,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+            )
+            .is_ok()
+            {
+                self.shown_rect.set(Some(bounds));
+            }
         }
     }
 
     /// Hide the border overlay without destroying it.
     pub fn hide(&self) {
+        if self.shown_rect.replace(None).is_none() {
+            return;
+        }
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
@@ -187,19 +205,39 @@ unsafe extern "system" fn border_wnd_proc(
                     let border_brush = CreateSolidBrush(BORDER_COLOR);
 
                     // Top edge
-                    let top = RECT { left: 0, top: 0, right: w, bottom: bw };
+                    let top = RECT {
+                        left: 0,
+                        top: 0,
+                        right: w,
+                        bottom: bw,
+                    };
                     FillRect(hdc, &top, border_brush);
 
                     // Bottom edge
-                    let bottom = RECT { left: 0, top: h - bw, right: w, bottom: h };
+                    let bottom = RECT {
+                        left: 0,
+                        top: h - bw,
+                        right: w,
+                        bottom: h,
+                    };
                     FillRect(hdc, &bottom, border_brush);
 
                     // Left edge (between top and bottom)
-                    let left = RECT { left: 0, top: bw, right: bw, bottom: h - bw };
+                    let left = RECT {
+                        left: 0,
+                        top: bw,
+                        right: bw,
+                        bottom: h - bw,
+                    };
                     FillRect(hdc, &left, border_brush);
 
                     // Right edge (between top and bottom)
-                    let right = RECT { left: w - bw, top: bw, right: w, bottom: h - bw };
+                    let right = RECT {
+                        left: w - bw,
+                        top: bw,
+                        right: w,
+                        bottom: h - bw,
+                    };
                     FillRect(hdc, &right, border_brush);
 
                     // Clean up GDI objects

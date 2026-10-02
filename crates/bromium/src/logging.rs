@@ -189,8 +189,9 @@ pub fn init_logger(
         }
         log::set_max_level(LevelFilter::Trace);
         log::info!(
-            "Logger initialized. Default log file: {}",
-            log_file.display()
+            "Logger initialized. Default log file: {} / Log level: {:?}",
+            log_file.display(),
+            log_level
         );
     });
 
@@ -436,4 +437,11 @@ pub fn py_enable_file_logging(enable: bool) -> PyResult<()> {
 #[pyo3(name = "reset_log_file")]
 pub fn py_reset_log_file() -> PyResult<()> {
     reset_log_file()
+}
+/// Log a message at the INFO level.
+#[pyfunction]
+#[pyo3(name = "log")]
+pub fn py_log(message: &str) -> PyResult<()> {
+    log::info!("{}", message);
+    Ok(())
 }
