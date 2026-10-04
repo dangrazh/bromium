@@ -60,6 +60,25 @@ identities when needed, and the final hit or failure. Provider discovery runs on
 one bounded worker; a deadline bounds the caller's wait but cannot cancel an
 individual COM call already in progress.
 
+Transient invalidation during point-capture publication permits at most three
+acquisition attempts, with 25/50 ms backoffs, within the original query deadline.
+Retries remain narrow and pin the original target identity and native window;
+they never switch to a different control. `point_retry` Debug records explain
+each invalidation and retry decision. Provider failures, timeouts, and missing or
+ambiguous ancestry are not automatically retried.
+
+For missing/ambiguous ancestry, Debug `point_ancestry_mismatch` records the
+expected occurrence, qualified ancestry, captured parent and immediate children,
+and original-versus-cached runtime IDs and metadata from capture (bounded to 128
+records per parent). A separately labelled, later read-only probe compares raw
+and control-view parent/child relationships, native handles, runtime IDs before
+and after `BuildUpdatedCache`, names, types, bounds and class/framework/provider
+information. This probe has a cooperative 500 ms budget within the original
+deadline, at most 256 provider operations and 32 children per view. Skips and
+incomplete enumeration are explicit. A running COM call cannot be cancelled;
+the caller still waits only until its deadline. Diagnostic evidence never
+repairs membership or authorizes an action. No separate diagnostic tool is needed.
+
 For menu hit-testing discrepancies, Debug/Trace also emits `point_hit_probe`
 records with a per-query `query` ID:
 

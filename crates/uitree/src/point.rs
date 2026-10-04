@@ -11,6 +11,8 @@ use windows::Win32::{
 mod diagnostics;
 #[path = "point_menu.rs"]
 mod menu;
+#[path = "point_mismatch.rs"]
+mod mismatch;
 #[path = "point_probe.rs"]
 mod probe;
 
@@ -166,43 +168,94 @@ fn resolve_point_with(
     let Some(native) = native_read() else {
         return Ok(None);
     };
-    let (epoch, _) = service.point_capture_context();
-    log::debug!("point_lookup route=narrow_uia_spine native={:?}", native);
-    let discovery = ancestry().map_err(|e| stale(service, title, e))?;
-    let diagnostic_id = discovery.diagnostic_id;
-    if native_read().as_ref() != Some(&native) {
-        return Err(stale(
-            service,
-            title,
-            "Native popup/window changed during coordinate query",
-        ));
-    }
-    let (Some(target), Some(desktop), Some((_, process))) = (
-        discovery.path.first(),
-        discovery.path.last(),
-        discovery.window,
-    ) else {
-        return Err(stale(
-            service,
-            title,
-            "Point ancestry has no desktop/window anchor",
-        ));
-    };
-    let (tree, id) = service
-        .publish_point(
+    let mut expected_target = None;
+    for attempt in 1..=3 {
+        if Instant::now() >= deadline {
+            return Err(stale(service, title, "Coordinate query deadline expired"));
+        }
+        if native_read().as_ref() != Some(&native) {
+            return Err(stale(
+                service,
+                title,
+                "Native popup/window changed during coordinate query",
+            ));
+        }
+        let (epoch, _) = service.point_capture_context();
+        log::debug!("point_lookup route=narrow_uia_spine native={:?}", native);
+        let discovery = ancestry().map_err(|e| stale(service, title, e))?;
+        let diagnostic_id = discovery.diagnostic_id;
+        if native_read().as_ref() != Some(&native) {
+            return Err(stale(
+                service,
+                title,
+                "Native popup/window changed during coordinate query",
+            ));
+        }
+        let (Some(target), Some(desktop), Some((_, process))) = (
+            discovery.path.first(),
+            discovery.path.last(),
+            discovery.window,
+        ) else {
+            return Err(stale(
+                service,
+                title,
+                "Point ancestry has no desktop/window anchor",
+            ));
+        };
+        let identity = (target.clone(), desktop.clone(), process);
+        if expected_target
+            .as_ref()
+            .is_some_and(|expected| expected != &identity)
+        {
+            return Err(stale(
+                service,
+                title,
+                "Point target changed during invalidation retry",
+            ));
+        }
+        expected_target = Some(identity);
+        let (tree, id) = match service.publish_point(
             desktop,
             discovery.observation,
             target,
             process,
             epoch,
             deadline,
-        )
-        .map_err(|e| stale(service, title, e))?;
-    if !in_scope(&tree, id, &native, title) {
-        return Ok(None);
+        ) {
+            Ok(result) => result,
+            Err(crate::service::PointPublishError::Invalidated) => {
+                let delay = std::time::Duration::from_millis(25 * attempt);
+                let retry =
+                    attempt < 3 && deadline.saturating_duration_since(Instant::now()) > delay;
+                log::debug!(
+                    "point_retry attempt={} max_attempts=3 retry={} query={:?} target={:?} reason=invalidated remaining_ms={}",
+                    attempt,
+                    retry,
+                    diagnostic_id,
+                    target,
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis()
+                );
+                if !retry {
+                    return Err(stale(
+                        service,
+                        title,
+                        crate::service::PointPublishError::Invalidated.to_string(),
+                    ));
+                }
+                std::thread::sleep(delay);
+                continue;
+            }
+            Err(error) => return Err(stale(service, title, error.to_string())),
+        };
+        if !in_scope(&tree, id, &native, title) {
+            return Ok(None);
+        }
+        diagnostics::snapshot(&tree, id, _x, _y, diagnostic_id);
+        return Ok(Some((tree, id)));
     }
-    diagnostics::snapshot(&tree, id, _x, _y, diagnostic_id);
-    Ok(Some((tree, id)))
+    unreachable!("last invalidated attempt returns an error")
 }
 
 fn element_in_region(tree: &UITree, window: usize, x: i32, y: i32) -> Option<&UIElementInTree> {
@@ -416,6 +469,7 @@ mod tests {
     fn point_capture_rejects_events_during_acquisition() {
         let (service, discovery, native) = fixture();
         let window = service.snapshot().index_for_id(&[42, 2]).unwrap();
+        let mut attempts = 0;
         let result = resolve_point_with(
             &service,
             10,
@@ -424,12 +478,107 @@ mod tests {
             Instant::now() + std::time::Duration::from_secs(2),
             || Some(native.clone()),
             || {
+                attempts += 1;
                 service.invalidate(window, crate::capture::CaptureKind::Subtree);
                 Ok(discovery.clone())
             },
         )
         .unwrap_err();
         assert!(result.reason.contains("invalidated"));
+        assert_eq!(attempts, 3);
+    }
+    #[test]
+    fn structural_failure_is_not_retried() {
+        let (service, _, native) = fixture();
+        let mut attempts = 0;
+        let error = resolve_point_with(
+            &service,
+            10,
+            10,
+            None,
+            Instant::now() + std::time::Duration::from_secs(2),
+            || Some(native.clone()),
+            || {
+                attempts += 1;
+                Err("Point ancestry occurrence is missing or ambiguous".into())
+            },
+        )
+        .unwrap_err();
+        assert!(error.reason.contains("ambiguous"));
+        assert_eq!(attempts, 1);
+    }
+    #[test]
+    fn invalidation_retry_does_not_extend_original_deadline() {
+        let (service, discovery, native) = fixture();
+        let window = service.snapshot().index_for_id(&[42, 2]).unwrap();
+        let mut attempts = 0;
+        let result = resolve_point_with(
+            &service,
+            10,
+            10,
+            None,
+            Instant::now() + std::time::Duration::from_millis(20),
+            || Some(native.clone()),
+            || {
+                attempts += 1;
+                service.invalidate(window, crate::capture::CaptureKind::Subtree);
+                Ok(discovery.clone())
+            },
+        );
+        assert!(result.is_err());
+        assert!(attempts <= 1, "insufficient budget for the first backoff");
+    }
+    #[test]
+    fn retry_never_switches_target() {
+        let (service, discovery, native) = fixture();
+        let window = service.snapshot().index_for_id(&[42, 2]).unwrap();
+        let mut attempts = 0;
+        let error = resolve_point_with(
+            &service,
+            10,
+            10,
+            None,
+            Instant::now() + std::time::Duration::from_secs(2),
+            || Some(native.clone()),
+            || {
+                attempts += 1;
+                let mut next = discovery.clone();
+                if attempts == 1 {
+                    service.invalidate(window, crate::capture::CaptureKind::Subtree);
+                } else {
+                    next.path[0] = next.path[1].clone();
+                }
+                Ok(next)
+            },
+        )
+        .unwrap_err();
+        assert!(error.reason.contains("target changed"));
+        assert_eq!(attempts, 2);
+    }
+    #[test]
+    fn transient_invalidation_reacquires_narrow_capture() {
+        let (service, discovery, native) = fixture();
+        let window = service.snapshot().index_for_id(&[42, 2]).unwrap();
+        let mut attempts = 0;
+        let result = resolve_point_with(
+            &service,
+            10,
+            10,
+            None,
+            Instant::now() + std::time::Duration::from_secs(2),
+            || Some(native.clone()),
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    service.invalidate(window, crate::capture::CaptureKind::Subtree);
+                }
+                Ok(discovery.clone())
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(result.0.node(result.1).1.get_name(), "Settings");
     }
     #[test]
     fn point_scope_is_checked_without_broad_capture() {

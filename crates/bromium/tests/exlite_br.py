@@ -23,42 +23,25 @@ test_iterator = iter(tests)
 def br_announce_next_test():
     try:
         test = next(test_iterator)
-        print(f"Next test: {test}")
+        print(f"\nNext test: {test}")
         bromium.log(f"Next test: {test}")
     except StopIteration:
         print("No more tests available.")
         bromium.log("No more tests available.")
-        # end the program gracefully
-        system.exit(0)
 
 def br_get_xpath():
-    print("Retrieving XPath of the element under the cursor...")
+    print("\nRetrieving XPath of the element under the cursor...")
     try:
         # Get the current cursor position
         x, y = driver.get_cursor_pos()
         print(f"Cursor position: ({x}, {y})")
         element: Element = driver.get_element_by_coordinates(x, y)
         # xpath = element.xpath
-        print("Element found with the following properties:")
-        print("Name:", element.name)
-        print("Runtime ID:", element.runtime_id)
-        print("Bounds:", element.bounding_rectangle)
-        print("XPath:", element.xpath)        
-        # print("getting Panes...")
-        # panes = driver.get_elements_by_xpath(
-        #     "/Pane/Window[@Name='*Unbenannt – Notepad']/Pane"
-        # )
-        # print(f"Found {len(panes)} panes:")
-        # for index, pane in enumerate(panes, 1):
-        #     print(
-        #         f"Pane[{index}]:",
-        #         repr(pane.name),
-        #         pane.runtime_id,
-        #         pane.bounding_rectangle,
-        #     )        
+        print(f"Element found with the following properties: Name: {element.name}, Runtime ID: {element.runtime_id}, Bounds: {element.bounding_rectangle}")
+        print(f"Element XPath: {element.xpath}")        
     
     except (bromium.ElementNotFoundError, AttributeError, RuntimeError, ValueError) as e:
-        print(f"Error while trying to get XPath: {e}\n ")
+        print(f"Error while trying to get XPath: {e}")
 
 @wrap.simple
 def br_init():

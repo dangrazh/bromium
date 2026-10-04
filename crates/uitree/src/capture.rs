@@ -48,9 +48,48 @@ pub struct UiaCapture {
     excluded_process: Option<u32>,
     probe: probe::Collisions<UIElement>,
     diagnostic_ancestry: Vec<String>,
+    point_evidence: Option<PointEvidence>,
+}
+
+/// Existing capture reads retained only for the current point-parent enumeration.
+/// No extra provider reads; discarded silently when the spine joins successfully.
+#[derive(Default)]
+pub(crate) struct PointEvidence {
+    pub records: Vec<String>,
+    pub omitted: usize,
+}
+impl PointEvidence {
+    fn record(&mut self, entry: impl FnOnce() -> String) {
+        if self.records.len() < 128 {
+            self.records.push(entry());
+        } else {
+            self.omitted += 1;
+        }
+    }
+}
+
+#[cfg(test)]
+mod point_evidence_tests {
+    use super::PointEvidence;
+    #[test]
+    fn evidence_is_bounded_and_does_not_format_omitted_records() {
+        let mut evidence = PointEvidence::default();
+        for _ in 0..128 {
+            evidence.record(|| "captured".into());
+        }
+        evidence.record(|| panic!("must not format omitted record"));
+        assert_eq!(evidence.records.len(), 128);
+        assert_eq!(evidence.omitted, 1);
+    }
 }
 
 impl UiaCapture {
+    pub(crate) fn begin_point_evidence(&mut self) {
+        self.point_evidence = log::log_enabled!(log::Level::Debug).then(PointEvidence::default);
+    }
+    pub(crate) fn take_point_evidence(&mut self) -> Option<PointEvidence> {
+        self.point_evidence.take()
+    }
     pub(crate) fn excluding_process(process: u32) -> Self {
         Self {
             excluded_process: Some(process),
@@ -198,6 +237,12 @@ impl UiaCapture {
         }
         let mut properties = SaveUIElement::from_cache(&cached).map_err(|e| e.to_string())?;
         properties.qualify(ancestor);
+        if let Some(evidence) = &mut self.point_evidence {
+            evidence.record(|| format!(
+                "original_runtime_id={original_id:?} cached_runtime_id={cached_id:?} identity={:?} name={:?} control_type={:?} bounds={:?} class={:?} framework={:?} provider={:?}",
+                properties.identity(), properties.get_name(), properties.get_control_type(), properties.get_bounding_rectangle(),
+                cached.get_cached_classname(), cached.get_cached_framework_id(), cached.get_cached_provider_description()));
+        }
         let context = properties.child_context();
         if log::log_enabled!(log::Level::Debug) {
             self.probe.observe(&properties.identity(), &element);

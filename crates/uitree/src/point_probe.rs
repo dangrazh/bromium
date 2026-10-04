@@ -190,6 +190,7 @@ fn discover(
                 // This is also the membership evidence needed for positional locators.
                 for i in 1..elements.len() - 1 {
                     check()?;
+                    capture.begin_point_evidence();
                     let parent = capture.walk(
                         &automation,
                         elements[i].clone(),
@@ -202,7 +203,24 @@ fn discover(
                     if parent.properties.identity() != path[i] {
                         return Err("Point ancestor changed during capture".into());
                     }
-                    observation = join_spine(parent, observation)?;
+                    let evidence = capture.take_point_evidence();
+                    observation =
+                        join_spine_reporting(parent, observation, |parent, child, error| {
+                            super::mismatch::report(
+                                &automation,
+                                &elements[i],
+                                &elements[i - 1],
+                                parent,
+                                child,
+                                &path,
+                                i,
+                                evidence.as_ref(),
+                                diagnostic.id,
+                                deadline,
+                                excluded_process,
+                                error,
+                            );
+                        })?;
                 }
                 check()?;
                 let hit = automation
@@ -242,10 +260,19 @@ fn discover(
     Err("Point ancestry depth limit exceeded".into())
 }
 
-fn join_spine(mut parent: Observation, child: Observation) -> Result<Observation, String> {
+#[cfg(test)]
+fn join_spine(parent: Observation, child: Observation) -> Result<Observation, String> {
+    join_spine_reporting(parent, child, |_, _, _| {})
+}
+
+fn join_spine_reporting(
+    mut parent: Observation,
+    child: Observation,
+    report: impl FnOnce(&Observation, &Observation, &str),
+) -> Result<Observation, String> {
     let children = parent
         .children
-        .as_mut()
+        .as_ref()
         .ok_or("Point parent membership not captured")?;
     let identity = child.properties.identity();
     let matches: Vec<_> = children
@@ -255,12 +282,14 @@ fn join_spine(mut parent: Observation, child: Observation) -> Result<Observation
         .map(|(i, _)| i)
         .collect();
     if matches.len() != 1 {
-        return Err(format!(
+        let error = format!(
             "Point ancestry occurrence is missing or ambiguous; identity={identity:?}; matches={}",
             matches.len()
-        ));
+        );
+        report(&parent, &child, &error);
+        return Err(error);
     }
-    children[matches[0]] = child;
+    parent.children.as_mut().unwrap()[matches[0]] = child;
     Ok(parent)
 }
 
@@ -299,6 +328,35 @@ mod tests {
         assert!(error.contains("ambiguous"));
         assert!(error.contains("matches=2"));
         assert!(join_spine(node(1, Some(vec![])), node(2, None)).is_err());
+    }
+    #[test]
+    fn mismatch_report_receives_unmodified_capture_and_expected_occurrence() {
+        for count in [0, 2] {
+            let mut reported = false;
+            let result = join_spine_reporting(
+                node(1, Some(vec![node(2, None); count])),
+                node(2, None),
+                |parent, expected, error| {
+                    reported = true;
+                    assert_eq!(parent.children.as_ref().unwrap().len(), count);
+                    assert_eq!(
+                        expected.properties.identity(),
+                        node(2, None).properties.identity()
+                    );
+                    assert!(error.contains(&format!("matches={count}")));
+                },
+            );
+            assert!(result.is_err());
+            assert!(reported);
+        }
+        assert!(
+            join_spine_reporting(
+                node(1, Some(vec![node(2, None)])),
+                node(2, None),
+                |_, _, _| panic!("successful join must not probe")
+            )
+            .is_ok()
+        );
     }
     #[test]
     fn expired_point_discovery_does_not_start_provider_work() {

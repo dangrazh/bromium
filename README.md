@@ -52,6 +52,11 @@ children along the hit ancestry, not the entire Office/window subtree. All work
 shares one deadline. Debug `point_lookup` logs
 show the mapping and outcome; a popup disappearing during lookup reports stale
 state instead of returning a control beneath it.
+Transient publication invalidations allow up to three narrow capture attempts
+within that same deadline, without switching target identity or native window.
+Debug `point_retry` explains retry decisions; `point_ancestry_mismatch` records
+captured membership and bounded raw/control-view probes for missing or ambiguous
+ancestry. Structural mismatches are diagnosed, not retried or guessed away.
 Point queries repair their anchored region without waiting for unrelated desktop
 membership changes. Missing windows can be discovered through UIA ancestry without
 enumerating desktop siblings. Global XPath queries still require their full query

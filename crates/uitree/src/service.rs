@@ -25,6 +25,24 @@ pub struct StaleTree {
     pub coverage: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PointPublishError {
+    #[error("Point window invalidated during narrow capture")]
+    Invalidated,
+    #[error("{0}")]
+    Other(String),
+}
+impl From<String> for PointPublishError {
+    fn from(value: String) -> Self {
+        Self::Other(value)
+    }
+}
+impl From<&str> for PointPublishError {
+    fn from(value: &str) -> Self {
+        Self::Other(value.into())
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Dirty {
     kind: CaptureKind,
@@ -145,7 +163,7 @@ impl TreeService {
         process: u32,
         started_epoch: u64,
         deadline: Instant,
-    ) -> Result<(UITree, usize), String> {
+    ) -> Result<(UITree, usize), PointPublishError> {
         let mut s = self.shared.state.lock().unwrap();
         if Instant::now() >= deadline {
             return Err("Point capture deadline expired".into());
@@ -203,7 +221,7 @@ impl TreeService {
                 .iter()
                 .any(|(identity, &epoch)| epoch > started_epoch && path.contains(identity))
         {
-            return Err("Point window invalidated during narrow capture".into());
+            return Err(PointPublishError::Invalidated);
         }
         let mut candidate = s.tree.clone();
         let window = match existing {
@@ -1410,6 +1428,7 @@ mod tests {
                     Instant::now() + Duration::from_secs(1)
                 )
                 .unwrap_err()
+                .to_string()
                 .contains("invalidated")
         );
     }
