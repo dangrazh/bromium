@@ -38,7 +38,8 @@ def br_get_xpath():
         element: Element = driver.get_element_by_coordinates(x, y)
         # xpath = element.xpath
         print(f"Element found with the following properties: Name: {element.name}, Runtime ID: {element.runtime_id}, Bounds: {element.bounding_rectangle}")
-        print(f"Element XPath: {element.xpath}")        
+        print(f"Element XPath: {element.xpath}")
+        print(f"XPath status: {element.xpath_status}")
     
     except (bromium.ElementNotFoundError, AttributeError, RuntimeError, ValueError) as e:
         print(f"Error while trying to get XPath: {e}")

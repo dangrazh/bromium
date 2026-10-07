@@ -14,13 +14,27 @@ The workspace also includes UI Explore, a desktop tree inspector and XPath tool.
 - Get cursor position coordinates
 - Retrieve UI element information at specific coordinates
 
-Coordinate lookup generates a window-scoped XPath such as
-`/Pane[@Name='Desktop 1']/Window[@Name='resume.txt – Notepad']//Button[@Name='Einstellungen']`
-when the control's type and nonempty name are unique within its completely captured
-window. This avoids positional shifts caused by transient intermediate panes such
-as tooltip `PopupHost` nodes. Ambiguous or unnamed controls retain a full-path
-fallback. Uniqueness is established for the captured state, not guaranteed across
-future application changes; duplicate window titles can still require positions.
+Coordinate lookup generates reusable XPath candidates such as
+`/Pane/Window[@Name='resume.txt – Notepad']//Button[@Name='Einstellungen']`.
+It prefers AutomationId, then Name, within a semantic window anchor. No generated
+automation locator contains runtime IDs, native handles or `NodeKey`.
+
+```python
+element = driver.get_element_by_coordinates(x, y)
+print(element.xpath, element.xpath_status)  # usually "candidate" (unverified)
+# Explicitly expensive: fresh full desktop scan within driver.timeout_ms.
+verified = driver.get_element_by_coordinates(x, y, verify_xpath=True)
+assert verified.xpath_status == "snapshot_unique"
+```
+
+`verify_xpath=True` scans the entire exposed desktop (not just window_title),
+keeps the original target identity, and fails if it disappears, full coverage
+cannot be obtained, or no unique reusable locator is available. It never silently
+returns an unverified result. Increase timeout_ms explicitly for slow systems.
+Uniqueness is for the captured state, not a guarantee about future sessions:
+window titles, language, AutomationIds and layout still need to remain compatible.
+Structural fallback below a window requires enumerated siblings; indistinguishable
+windows raise a locator-generation error instead of using window positions.
 
 Coordinate lookup supports popup/menu HWNDs nested inside an application's UIA
 tree as well as separately exposed menus. A bounded UIA point worker acquires the
@@ -49,10 +63,17 @@ UIA ancestry can add that window without enumerating desktop siblings. This does
 not clear unrelated dirty regions or weaken XPath query coverage. The point
 worker is separate from the background subtree worker. A blocked point-provider
 call can still exhaust the deadline; COM calls cannot be forcibly interrupted.
-If the hit's own ancestry is missing or ambiguous, lookup raises `StaleTreeError`
-instead of selecting an arbitrary occurrence. With partial/dirty window coverage,
-the returned XPath uses a session-specific window `NodeKey` and sibling-validated
-ancestry; it does not assert uniqueness across uncaptured descendants.
+Ambiguous ancestry still raises `StaleTreeError`. A point-discovered XAML `Popup`
+omitted by its parent's child enumeration may be retained when the popup's parent
+and the final hit-to-desktop identity chain are revalidated. The parent is marked
+as partial membership, not completely observed; the popup does not certify global
+XPath coverage. Locators through that parent are semantic candidates, never
+invented sibling positions. A later complete capture can remove
+the popup, and live actions retain strict identity checks (they may still fail if
+the provider cannot resolve the element). Other missing links remain errors.
+Partial/dirty coverage produces `xpath_status="candidate"`; uniqueness across
+uncaptured descendants is not asserted. Internal/debug snapshot locators still
+use `NodeKey`, independently of reusable automation locators.
 
 Enable Debug logging for `point_lookup` diagnostics: screen coordinates, native
 root handle, class and owner chain, selected cache/repair route, UIA ancestor
@@ -67,6 +88,14 @@ they never switch to a different control. `point_retry` Debug records explain
 each invalidation and retry decision. Provider failures, timeouts, and missing or
 ambiguous ancestry are not automatically retried.
 
+Debug `point_invalidation` records the target, capture/current epochs,
+invalidation-history floor and the overlapping identity with its epoch and repair
+kind. Debug `point_capture_timing` logs window/target acquisition and each ancestor
+capture's begin/end, identity/depth, elapsed time, child count, cumulative captured
+node count and errors. A begin record without its matching end at the query
+deadline identifies unfinished work; these timings do not extend the deadline.
+`point_popup_branch` records a popup admitted using verified upward ancestry.
+
 For missing/ambiguous ancestry, Debug `point_ancestry_mismatch` records the
 expected occurrence, qualified ancestry, captured parent and immediate children,
 and original-versus-cached runtime IDs and metadata from capture (bounded to 128
@@ -77,7 +106,8 @@ information. This probe has a cooperative 500 ms budget within the original
 deadline, at most 256 provider operations and 32 children per view. Skips and
 incomplete enumeration are explicit. A running COM call cannot be cancelled;
 the caller still waits only until its deadline. Diagnostic evidence never
-repairs membership or authorizes an action. No separate diagnostic tool is needed.
+repairs membership or authorizes an action; popup admission uses separate live
+identity checks, not the diagnostic samples. No separate diagnostic tool is needed.
 
 For menu hit-testing discrepancies, Debug/Trace also emits `point_hit_probe`
 records with a per-query `query` ID:
@@ -105,6 +135,41 @@ and has a 10 ms cooperative scan budget. `None` visibility means it was not
 captured; `IsOffscreen=false` is not proof that an element is visually unobscured.
 This instrumentation does not select candidates, refresh menu branches, or change
 cursor-tracking behaviour. It is disabled below Debug level.
+
+Coordinate lookup also reconciles an empty, unnamed `Chrome_WidgetWin_*` pane
+inside the observed `TeamsWebView` window structure with a unique point-covering
+interactive control in its sibling Chrome document. Cached identity paths only
+prioritize the search; current provider properties, visibility, downward membership
+and upward occurrence ancestry determine the result. Overlapping candidates,
+provider errors and incomplete bounded searches fail closed with `StaleTreeError`.
+The search streams point-covering branches (at most 256 nodes, 64 levels and 4,096
+provider calls per pass), shares the original query deadline, and is repeated at
+final hit verification. It does not capture a whole desktop or select a control
+by its name or cached rectangle. Other window classes retain their existing route.
+Debug `point_host_reconcile` records selections; `initial_host_reconciled` and
+`verification_host_reconciled` identify the results in the hit diagnostics.
+
+For unnamed Chromium host panes (`Pane`, empty name, `Chrome_WidgetWin_*` class),
+Debug/Trace additionally emits `point_host_probe` using the same query ID. It
+records live raw-view children of the hit and point-covering branches of its
+already discovered window, including sibling WebView content. Node records include
+runtime ID, native handle, name/type, automation ID, class/framework/provider,
+bounds, visibility and an ancestry path of child indices (diagnostic only).
+These reads have an additional **250 ms cooperative budget within the original
+query deadline**, split between host and window surfaces, with at most 64 nodes,
+256 calls per surface. Wrapper traversal is limited to 8 levels. A discovered
+Chrome `Document` grants up to 16 further levels within that document, sharing
+the same time/node/call budgets; nested documents do not reset this allowance.
+`document_entry` records the transition and remaining budget. `truncated` and
+`surface_end` records identify wrapper/document depth, node, call or deadline
+limits, provider errors and excluded/unverified processes.
+Non-covering or unknown-bounds branches are
+logged but not deepened. Skips, errors, pruning and limits are reported explicitly;
+a running provider call cannot be cancelled. Cached overlapping candidates include
+ancestry, metadata age and child coverage (4,096 nodes / 16 candidates / 10 ms).
+Neither scan proves absence or occlusion. No desktop scan or selection change is
+performed, and no separate tool is needed. Names/provider details may contain
+application data; review logs before sharing.
 
 
 
@@ -463,6 +528,7 @@ child lists.
 |----------|------|-------------|
 | `name` | `str` | The name of the UI element |
 | `xpath` | `str` | The XPath locator for this element |
+| `xpath_status` | `str` | `candidate` (unverified), `snapshot_unique`, `provided`, or `unavailable` |
 | `handle` | `int` | The native window handle (HWND) |
 | `control_type` | `str` | The UI Automation control type (e.g. "Button", "Edit") |
 | `runtime_id` | `list[int]` | The unmodified provider runtime ID; not necessarily unique, even with `handle` |

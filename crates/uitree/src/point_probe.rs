@@ -13,8 +13,10 @@ pub(super) struct Discovery {
     pub diagnostic_id: Option<u64>,
     pub path: Vec<ElementIdentity>,
     pub window: Option<(SaveUIElement, u32)>,
-    /// Complete immediate children along the hit ancestry, never unrelated subtrees.
+    /// Immediate children along the hit ancestry; `partial_parents` explicitly
+    /// identifies lists supplemented by independently verified popup edges.
     pub observation: Observation,
+    pub partial_parents: Vec<ElementIdentity>,
 }
 
 struct Job {
@@ -22,6 +24,7 @@ struct Job {
     y: i32,
     deadline: Instant,
     excluded_process: Option<u32>,
+    host_hints: Vec<Vec<ElementIdentity>>,
     result: SyncSender<Result<Discovery, String>>,
 }
 
@@ -30,6 +33,7 @@ pub(super) fn ancestors(
     y: i32,
     deadline: Instant,
     excluded_process: Option<u32>,
+    host_hints: Vec<Vec<ElementIdentity>>,
 ) -> Result<Discovery, String> {
     static QUEUE: OnceLock<SyncSender<Job>> = OnceLock::new();
     if Instant::now() >= deadline {
@@ -43,7 +47,13 @@ pub(super) fn ancestors(
                     continue;
                 }
                 let result = std::panic::catch_unwind(|| {
-                    discover(job.x, job.y, job.deadline, job.excluded_process)
+                    discover(
+                        job.x,
+                        job.y,
+                        job.deadline,
+                        job.excluded_process,
+                        &job.host_hints,
+                    )
                 })
                 .unwrap_or_else(|_| Err("Point discovery worker panicked".into()));
                 let _ = job.result.try_send(result);
@@ -58,6 +68,7 @@ pub(super) fn ancestors(
             y,
             deadline,
             excluded_process,
+            host_hints,
             result: tx,
         })
         .map_err(|_| "Point discovery capacity unavailable")?;
@@ -72,6 +83,7 @@ fn discover(
     y: i32,
     deadline: Instant,
     excluded_process: Option<u32>,
+    host_hints: &[Vec<ElementIdentity>],
 ) -> Result<Discovery, String> {
     let check = || {
         if Instant::now() < deadline {
@@ -108,6 +120,16 @@ fn discover(
     }
     element = super::menu::reconcile(&automation, element, x, y, deadline)?;
     diagnostic.element("initial_menu_reconciled", &element, &automation);
+    element = super::host::reconcile(
+        &automation,
+        element,
+        x,
+        y,
+        deadline,
+        excluded_process,
+        host_hints,
+    )?;
+    diagnostic.element("initial_host_reconciled", &element, &automation);
     let mut path = Vec::new();
     let mut elements = Vec::new();
     for depth in 0..64 {
@@ -147,6 +169,12 @@ fn discover(
                 }
                 ElementIdentity::qualify_path(&mut path);
                 let window = if elements.len() >= 2 {
+                    let started = Instant::now();
+                    log::debug!(
+                        "point_capture_timing query={:?} stage=window_begin identity={:?}",
+                        diagnostic.id,
+                        path[path.len() - 2]
+                    );
                     let element = &elements[elements.len() - 2];
                     check()?;
                     let process = element.get_process_id().map_err(|e| e.to_string())?;
@@ -161,6 +189,11 @@ fn discover(
                     {
                         return Err("Point window identity changed during discovery".into());
                     }
+                    log::debug!(
+                        "point_capture_timing query={:?} stage=window_end elapsed_us={}",
+                        diagnostic.id,
+                        started.elapsed().as_micros()
+                    );
                     Some((properties, process))
                 } else {
                     None
@@ -174,7 +207,14 @@ fn discover(
                 );
                 let cancel = std::sync::atomic::AtomicBool::new(false);
                 let mut count = 0;
-                let mut observation = capture.walk(
+                let mut partial_parents = Vec::new();
+                let started = Instant::now();
+                log::debug!(
+                    "point_capture_timing query={:?} stage=target_begin identity={:?}",
+                    diagnostic.id,
+                    path[0]
+                );
+                let target_result = capture.walk(
                     &automation,
                     elements[0].clone(),
                     0,
@@ -182,16 +222,42 @@ fn discover(
                     &cancel,
                     &mut count,
                     path[0].ancestor.as_deref(),
-                )?;
+                );
+                log::debug!(
+                    "point_capture_timing query={:?} stage=target_end elapsed_us={} error={:?}",
+                    diagnostic.id,
+                    started.elapsed().as_micros(),
+                    target_result.as_ref().err()
+                );
+                let mut observation = target_result?;
                 if observation.properties.identity() != path[0] {
                     return Err("Point target changed during property capture".into());
                 }
+                super::host_probe::report(
+                    &automation,
+                    &elements[0],
+                    &elements[elements.len() - 2],
+                    &observation.properties,
+                    x,
+                    y,
+                    diagnostic.id,
+                    deadline,
+                    excluded_process,
+                );
                 // Bottom-up spine: enumerate only each ancestor's immediate children.
                 // This is also the membership evidence needed for positional locators.
                 for i in 1..elements.len() - 1 {
                     check()?;
+                    let started = Instant::now();
+                    log::debug!(
+                        "point_capture_timing query={:?} stage=parent_begin depth={} identity={:?} remaining_ms={}",
+                        diagnostic.id,
+                        i,
+                        path[i],
+                        deadline.saturating_duration_since(started).as_millis()
+                    );
                     capture.begin_point_evidence();
-                    let parent = capture.walk(
+                    let parent_result = capture.walk(
                         &automation,
                         elements[i].clone(),
                         1,
@@ -199,13 +265,49 @@ fn discover(
                         &cancel,
                         &mut count,
                         path[i].ancestor.as_deref(),
-                    )?;
+                    );
+                    log::debug!(
+                        "point_capture_timing query={:?} stage=parent_end depth={} elapsed_us={} children={:?} nodes={} error={:?}",
+                        diagnostic.id,
+                        i,
+                        started.elapsed().as_micros(),
+                        parent_result
+                            .as_ref()
+                            .ok()
+                            .and_then(|p| p.children.as_ref().map(Vec::len)),
+                        count,
+                        parent_result.as_ref().err()
+                    );
+                    let parent = parent_result?;
                     if parent.properties.identity() != path[i] {
                         return Err("Point ancestor changed during capture".into());
                     }
                     let evidence = capture.take_point_evidence();
-                    observation =
-                        join_spine_reporting(parent, observation, |parent, child, error| {
+                    let popup = observation.properties.get_classname() == "Popup"
+                        && observation.properties.get_framework_id() == "XAML"
+                        && observation.properties.get_control_type() == "Window";
+                    // Upward evidence is checked again after the final hit test.
+                    let verified_popup = popup
+                        && path[i - 1].is_resolvable()
+                        && path[i].matches_provider(
+                            &walker
+                                .get_parent(&elements[i - 1])
+                                .map_err(|e| e.to_string())?,
+                        );
+                    let partial = verified_popup
+                        && parent.children.as_ref().is_some_and(|children| {
+                            !children.iter().any(|c| {
+                                c.properties.identity() == observation.properties.identity()
+                            })
+                        });
+                    if partial {
+                        partial_parents.push(path[i].clone());
+                    }
+                    observation = join_spine_verified(
+                        parent,
+                        observation,
+                        verified_popup,
+                        |parent, child, error| {
                             super::mismatch::report(
                                 &automation,
                                 &elements[i],
@@ -220,7 +322,8 @@ fn discover(
                                 excluded_process,
                                 error,
                             );
-                        })?;
+                        },
+                    )?;
                 }
                 check()?;
                 let hit = automation
@@ -237,8 +340,32 @@ fn discover(
                 diagnostic.element("verification_control_view", &hit, &automation);
                 let hit = super::menu::reconcile(&automation, hit, x, y, deadline)?;
                 diagnostic.element("verification_menu_reconciled", &hit, &automation);
+                let hit = super::host::reconcile(
+                    &automation,
+                    hit,
+                    x,
+                    y,
+                    deadline,
+                    excluded_process,
+                    host_hints,
+                )?;
+                diagnostic.element("verification_host_reconciled", &hit, &automation);
                 if !path[0].matches_live(&hit) {
                     return Err("Point target changed during narrow capture".into());
+                }
+                // A positive-only popup edge must remain attached to the same
+                // live ancestry, not merely share a name or rectangle.
+                if !partial_parents.is_empty() {
+                    let mut current = hit;
+                    for (i, expected) in path.iter().enumerate() {
+                        check()?;
+                        if !expected.matches_provider(&current) {
+                            return Err("Point popup ancestry changed during verification".into());
+                        }
+                        if i + 1 < path.len() {
+                            current = walker.get_parent(&current).map_err(|e| e.to_string())?;
+                        }
+                    }
                 }
                 check()?;
                 log::debug!(
@@ -252,6 +379,7 @@ fn discover(
                     path,
                     window,
                     observation,
+                    partial_parents,
                 });
             }
             Err(e) => return Err(format!("Point ancestry failed: {e}")),
@@ -265,9 +393,19 @@ fn join_spine(parent: Observation, child: Observation) -> Result<Observation, St
     join_spine_reporting(parent, child, |_, _, _| {})
 }
 
+#[cfg(test)]
 fn join_spine_reporting(
+    parent: Observation,
+    child: Observation,
+    report: impl FnOnce(&Observation, &Observation, &str),
+) -> Result<Observation, String> {
+    join_spine_verified(parent, child, false, report)
+}
+
+fn join_spine_verified(
     mut parent: Observation,
     child: Observation,
+    verified_popup: bool,
     report: impl FnOnce(&Observation, &Observation, &str),
 ) -> Result<Observation, String> {
     let children = parent
@@ -287,6 +425,15 @@ fn join_spine_reporting(
             matches.len()
         );
         report(&parent, &child, &error);
+        if matches.is_empty() && verified_popup {
+            log::debug!(
+                "point_popup_branch parent={:?} child={:?} membership=partial source=verified_point_ancestry",
+                parent.properties.identity(),
+                identity
+            );
+            parent.children.as_mut().unwrap().push(child);
+            return Ok(parent);
+        }
         return Err(error);
     }
     parent.children.as_mut().unwrap()[matches[0]] = child;
@@ -301,6 +448,56 @@ mod tests {
             properties: SaveUIElement::fixture(id, "Control", "Pane"),
             children,
         }
+    }
+    #[test]
+    fn point_popup_missing_from_enumeration_is_preserved_as_partial() {
+        let popup = Observation {
+            properties: SaveUIElement::fixture(705, "Popup", "Window"),
+            children: Some(vec![node(114, None)]),
+        };
+        let result = join_spine_verified(
+            node(1, Some(vec![node(2, None)])),
+            popup,
+            true,
+            |_, _, _| {},
+        );
+        assert!(
+            result.is_ok(),
+            "verified popup must not be lost: {result:?}"
+        );
+        let parent = result.unwrap();
+        assert_eq!(parent.children.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            parent.children.as_ref().unwrap()[0]
+                .properties
+                .get_runtime_id(),
+            &[42, 2]
+        );
+        assert_eq!(
+            parent.children.as_ref().unwrap()[1]
+                .children
+                .as_ref()
+                .unwrap()[0]
+                .properties
+                .get_runtime_id(),
+            &[42, 114]
+        );
+    }
+    #[test]
+    fn popup_repair_rejects_unverified_missing_or_ambiguous_children() {
+        assert!(
+            join_spine_verified(node(1, Some(vec![])), node(2, None), false, |_, _, _| {}).is_err()
+        );
+        assert!(
+            join_spine_verified(
+                node(1, Some(vec![node(2, None), node(2, None)])),
+                node(2, None),
+                true,
+                |_, _, _| {}
+            )
+            .is_err()
+        );
+        assert!(join_spine_verified(node(1, None), node(2, None), true, |_, _, _| {}).is_err());
     }
     #[test]
     fn spine_preserves_ambiguous_and_identity_less_siblings_without_descending() {
@@ -361,7 +558,7 @@ mod tests {
     #[test]
     fn expired_point_discovery_does_not_start_provider_work() {
         assert!(
-            ancestors(0, 0, Instant::now(), None)
+            ancestors(0, 0, Instant::now(), None, vec![])
                 .unwrap_err()
                 .contains("deadline")
         );

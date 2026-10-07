@@ -8,6 +8,157 @@ pub enum XpathGenError {
     XmlParseError(String),
     #[error("UI Element with runtime ID '{0}' not found")]
     ElementNotFound(String),
+    #[error("Reusable locator unavailable: {0}")]
+    ReusableLocatorUnavailable(String),
+}
+
+/// Uniqueness describes the supplied snapshot, never a future application state.
+#[derive(Clone, Debug)]
+pub struct ReusableLocator {
+    pub xpath: String,
+    pub snapshot_unique: bool,
+}
+
+/// Generate an application-scoped selector using only semantic attributes and,
+/// below the window, positions backed by complete sibling enumeration.
+/// `complete_membership` contains internal keys used only to assess evidence;
+/// those keys are never included in the generated XPath.
+pub fn get_reusable_locator(
+    key: &str,
+    xml: &str,
+    simple: bool,
+    complete_membership: &std::collections::HashSet<String>,
+    snapshot_complete: bool,
+) -> Result<ReusableLocator, XpathGenError> {
+    let doc = Document::parse(xml).map_err(|e| XpathGenError::XmlParseError(e.to_string()))?;
+    let target = doc
+        .descendants()
+        .find(|n| n.attribute("NodeKey") == Some(key))
+        .ok_or_else(|| XpathGenError::ElementNotFound(key.into()))?;
+    let root = doc.root_element();
+    if target == root {
+        return Ok(ReusableLocator {
+            xpath: format!("/{}", root.tag_name().name()),
+            snapshot_unique: snapshot_complete,
+        });
+    }
+    let window = target
+        .ancestors()
+        .find(|n| n.parent_element() == Some(root))
+        .ok_or_else(|| XpathGenError::ReusableLocatorUnavailable("no application anchor".into()))?;
+    fn predicate(node: Node, attrs: &[&str]) -> Option<String> {
+        let values: Option<Vec<_>> = attrs
+            .iter()
+            .map(|attr| {
+                node.attribute(*attr)
+                    .filter(|v| !v.is_empty())
+                    .map(|value| format!("@{attr}={}", xpath_string_literal(value)))
+            })
+            .collect();
+        values.map(|values| format!("[{}]", values.join(" and ")))
+    }
+    fn same(node: Node, other: Node, attrs: &[&str]) -> bool {
+        node.tag_name().name() == other.tag_name().name()
+            && attrs
+                .iter()
+                .all(|attr| node.attribute(*attr) == other.attribute(*attr))
+    }
+    let options: &[&[&str]] = &[
+        &["AutomationId"],
+        &["Name"],
+        &["AutomationId", "Name"],
+        &["Name", "ClassName"],
+        &["ClassName", "FrameworkId"],
+        &["ClassName"],
+    ];
+    let anchor = options
+        .iter()
+        .find_map(|attrs| {
+            let predicate = predicate(window, attrs)?;
+            (root
+                .children()
+                .filter(|n| n.is_element() && same(window, *n, attrs))
+                .count()
+                == 1)
+                .then(|| {
+                    format!(
+                        "/{}/{}{predicate}",
+                        root.tag_name().name(),
+                        window.tag_name().name()
+                    )
+                })
+        })
+        .ok_or_else(|| {
+            XpathGenError::ReusableLocatorUnavailable(
+                "window has no unique semantic anchor in the snapshot".into(),
+            )
+        })?;
+    let finish = |xpath| ReusableLocator {
+        xpath,
+        snapshot_unique: snapshot_complete,
+    };
+    if target == window {
+        return Ok(finish(anchor));
+    }
+    if !simple {
+        // A descendant selector avoids incidental panes/popups. With incomplete
+        // coverage it is explicitly a candidate, not a proven uniqueness claim.
+        for attrs in options.iter().take(4) {
+            if let Some(pred) = predicate(target, attrs)
+                && window
+                    .descendants()
+                    .filter(|n| n.is_element() && *n != window && same(target, *n, attrs))
+                    .count()
+                    == 1
+            {
+                return Ok(finish(format!(
+                    "{anchor}//{}{pred}",
+                    target.tag_name().name()
+                )));
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    let mut node = target;
+    while node != window {
+        let parent = node.parent_element().unwrap();
+        let siblings: Vec<_> = parent
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == node.tag_name().name())
+            .collect();
+        let semantic = if simple {
+            None
+        } else {
+            options.iter().find_map(|attrs| {
+                let pred = predicate(node, attrs)?;
+                (siblings.iter().filter(|n| same(node, **n, attrs)).count() == 1).then_some(pred)
+            })
+        };
+        let suffix = if let Some(pred) = semantic {
+            pred
+        } else {
+            if !parent
+                .attribute("NodeKey")
+                .is_some_and(|k| complete_membership.contains(k))
+            {
+                return Err(XpathGenError::ReusableLocatorUnavailable(
+                    "positional step requires complete sibling membership".into(),
+                ));
+            }
+            if siblings.len() > 1 {
+                format!(
+                    "[{}]",
+                    siblings.iter().position(|n| *n == node).unwrap() + 1
+                )
+            } else {
+                String::new()
+            }
+        };
+        parts.push(format!("{}{suffix}", node.tag_name().name()));
+        node = parent;
+    }
+    parts.reverse();
+    Ok(finish(format!("{anchor}/{}", parts.join("/"))))
 }
 
 /// Encode a value as an XPath string literal, handling embedded quotes.
@@ -275,6 +426,63 @@ pub fn get_xpath_window_scoped_from_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reusable_xpath_survives_new_process_handles_and_tooltip() {
+        let xml = r#"<Pane NodeKey="desktop"><Window Name="Editor" NodeKey="old-window"><Pane><MenuItem Name="File" AutomationId="FileMenu" NodeKey="old-target"/></Pane></Window></Pane>"#;
+        let next = xml
+            .replace("old-window", "new-window")
+            .replace("old-target", "new-target")
+            .replace(
+                "<Pane><MenuItem",
+                "<Pane Name=\"PopupHost\"/><Pane><MenuItem",
+            );
+        let locator =
+            get_reusable_locator("old-target", xml, false, &Default::default(), false).unwrap();
+        assert_eq!(
+            locator.xpath,
+            "/Pane/Window[@Name='Editor']//MenuItem[@AutomationId='FileMenu']"
+        );
+        assert!(!locator.snapshot_unique);
+        let next_locator =
+            get_reusable_locator("new-target", &next, false, &Default::default(), false).unwrap();
+        assert_eq!(locator.xpath, next_locator.xpath);
+        let matches = crate::xpath_eval::eval_xpath_thread_cached(
+            &format!("({})/@NodeKey", locator.xpath),
+            &next,
+        );
+        assert!(matches.is_success());
+        assert_eq!(matches.get_result_items().len(), 1);
+        assert_eq!(matches.get_result_items()[0].get_item_value(), "new-target");
+    }
+
+    #[test]
+    fn reusable_anchor_never_uses_window_position_or_identity() {
+        let xml = r#"<Pane><Window Name="App" NodeKey="a"/><Window Name="App" NodeKey="b"><Button Name="OK" NodeKey="target"/></Window></Pane>"#;
+        assert!(get_reusable_locator("target", xml, false, &Default::default(), true).is_err());
+        let disambiguated = xml.replace("NodeKey=\"b\"", "ClassName=\"Editor\" NodeKey=\"b\"");
+        let locator =
+            get_reusable_locator("target", &disambiguated, false, &Default::default(), true)
+                .unwrap();
+        assert!(locator.xpath.contains("@ClassName='Editor'"));
+        assert!(!locator.xpath.contains("NodeKey"));
+        assert!(locator.snapshot_unique);
+    }
+
+    #[test]
+    fn reusable_positions_require_enumerated_siblings_and_quotes_are_escaped() {
+        let xml = r#"<Pane NodeKey="d"><Window Name="It&apos;s &quot;Editor&quot;" NodeKey="w"><Button Name="OK" NodeKey="a"/><Button Name="OK" NodeKey="b"/></Window></Pane>"#;
+        assert!(get_reusable_locator("b", xml, false, &Default::default(), false).is_err());
+        let complete = ["w".to_string()].into_iter().collect();
+        let locator = get_reusable_locator("b", xml, false, &complete, true).unwrap();
+        assert!(locator.xpath.ends_with("/Button[2]"));
+        let matches = crate::xpath_eval::eval_xpath_thread_cached(
+            &format!("({})/@NodeKey", locator.xpath),
+            xml,
+        );
+        assert!(matches.is_success());
+        assert_eq!(matches.get_result_items()[0].get_item_value(), "b");
+    }
 
     #[test]
     fn window_scoped_locator_survives_tooltip_and_ignores_other_windows() {

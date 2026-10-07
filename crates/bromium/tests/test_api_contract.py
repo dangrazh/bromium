@@ -29,7 +29,12 @@ class ApiContractTests(unittest.TestCase):
                 args = node.args.posonlyargs + node.args.args
                 defaults = [inspect.Parameter.empty] * (len(args)-len(node.args.defaults)) + [ast.literal_eval(d) for d in node.args.defaults]
                 expected = [(a.arg, d) for a,d in zip(args, defaults) if a.arg not in ("self", "cls")]
+                expected += [(a.arg, ast.literal_eval(d) if d is not None else inspect.Parameter.empty)
+                             for a, d in zip(node.args.kwonlyargs, node.args.kw_defaults)]
                 self.assertEqual([(p.name,p.default) for p in actual], expected)
+                for arg in node.args.kwonlyargs:
+                    self.assertEqual(inspect.signature(target).parameters[arg.arg].kind,
+                                     inspect.Parameter.KEYWORD_ONLY)
 
     def test_snapshot_value_types_and_exception_hierarchy(self):
         element = bromium.Element("name", "//Button", 0, "Button", [42,1], (1,2,3,4))

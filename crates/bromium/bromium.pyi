@@ -176,7 +176,17 @@ class Element:
 
     @property
     def xpath(self) -> str:
-        """The XPath locator for this element within the UI tree."""
+        """Reusable generated XPath for coordinate hits, or caller-provided XPath.
+        Check xpath_status. Metadata-only elements may have no locator (empty string).
+        Generated selectors never use runtime IDs, HWNDs or NodeKey.
+        """
+        ...
+
+    @property
+    def xpath_status(self) -> str:
+        """'candidate' (unverified), 'snapshot_unique', 'provided', or 'unavailable'.
+        Snapshot uniqueness never guarantees future UI stability.
+        """
         ...
 
     @property
@@ -426,7 +436,7 @@ class WinDriver:
 
     # ─── Element lookup ───────────────────────────────────────────────────
 
-    def get_element_by_coordinates(self, x: int, y: int) -> Element:
+    def get_element_by_coordinates(self, x: int, y: int, *, verify_xpath: bool = False) -> Element:
         """
         Find the UI element at the given screen coordinates.
 
@@ -439,20 +449,28 @@ class WinDriver:
         Args:
             x: The x screen coordinate.
             y: The y screen coordinate.
+            verify_xpath: Force a fresh full-desktop scan before generating the
+                locator, ignoring window_title only for scan/uniqueness scope.
+                Uses the same timeout_ms deadline, retains the original target,
+                and fails if full coverage or uniqueness cannot be established.
 
         Returns:
             The exposed hit-test element in the native window under the point.
-            Its XPath prefers a control-type/Name locator unique within the owning
-            window, avoiding intermediate pane positions. Ambiguous or unnamed
-            controls fall back to a full path. Uniqueness is snapshot-specific.
-            Partial/dirty windows use a session-specific NodeKey window anchor
-            and the observed ancestry, without assuming whole-window uniqueness.
+            A reusable XPath using a semantic window anchor and AutomationId/Name,
+            with structural fallback where siblings were enumerated. Partial
+            coverage yields xpath_status='candidate', explicitly unverified.
+            verify_xpath=True yields 'snapshot_unique' or raises an error.
+            Titles, language, AutomationIds and layout must remain compatible
+            when the XPath is used in a later session.
 
         Raises:
             ElementNotFoundError: If no exposed element is found, or the native
                 window under the point is outside the configured title scope.
             StaleTreeError: If relevant coverage cannot be repaired by timeout_ms.
                 Also raised if the hit ancestry has missing/ambiguous identity.
+                Full-scan verification also fails if the original target vanishes.
+            TreeConstructionError: No reusable selector can be constructed
+                (for example, indistinguishable application windows).
         """
         ...
 

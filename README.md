@@ -52,19 +52,31 @@ children along the hit ancestry, not the entire Office/window subtree. All work
 shares one deadline. Debug `point_lookup` logs
 show the mapping and outcome; a popup disappearing during lookup reports stale
 state instead of returning a control beneath it.
+For empty unnamed Chromium host panes in `TeamsWebView` windows, a bounded
+same-window search reconciles the hit with a unique live-validated WebView control.
+Cached identities guide traversal only; ambiguous matches fail closed. This shared
+Python/UI Explore path retains the original deadline and does not scan the desktop.
 Transient publication invalidations allow up to three narrow capture attempts
 within that same deadline, without switching target identity or native window.
 Debug `point_retry` explains retry decisions; `point_ancestry_mismatch` records
 captured membership and bounded raw/control-view probes for missing or ambiguous
-ancestry. Structural mismatches are diagnosed, not retried or guessed away.
+ancestry. A point-discovered XAML popup omitted by downward enumeration can be
+retained only after its live ancestry is revalidated. Its parent's membership
+remains partial. Reusable locators are explicitly unverified candidates and never
+contain `NodeKey`, runtime IDs or native handles.
+Other missing/ambiguous links still fail conservatively. Debug
+`point_invalidation` identifies overlapping invalidations and epochs;
+`point_capture_timing` records per-ancestor capture work.
 Point queries repair their anchored region without waiting for unrelated desktop
 membership changes. Missing windows can be discovered through UIA ancestry without
 enumerating desktop siblings. Global XPath queries still require their full query
 scope to be current. A separate bounded point worker avoids waiting behind a
 background subtree capture, but a blocked call on that point worker can still
-cause a deadline error. With partial coverage, generated locators use a
-session-specific window `NodeKey` and the observed ancestry; they do not claim
-name uniqueness across uncaptured descendants.
+cause a deadline error. With partial coverage, generated locators do not claim
+uniqueness across uncaptured descendants (`element.xpath_status == "candidate"`).
+For explicit fresh full-desktop verification, use
+`driver.get_element_by_coordinates(x, y, verify_xpath=True)`; it shares the driver's
+timeout and returns `snapshot_unique` or fails, never silently downgrading.
 
 ## Python library
 
@@ -141,9 +153,14 @@ freezes the displayed snapshot for inspection; resume tracking or press Refresh
 to see current state again. The paused view is explicitly labelled and does not
 stop Rust's live-cache maintenance. See the [UI Explore guide](crates/uiexplore/README.md).
 
-Python coordinate lookup and UI Explore (with Simple XPath off) prefer unique
-window-scoped named locators, avoiding transient intermediate pane positions.
-Incomplete window coverage or ambiguous/unnamed controls retain full-path locators.
+Python coordinate lookup and UI Explore share reusable XPath generation: semantic
+window anchors, then AutomationId/Name selectors, with structural fallback only
+where siblings were enumerated. Duplicate indistinguishable windows produce an
+explicit error, not a window index or identity-based fallback. UI Explore labels
+unverified candidates and offers opt-in “Verify XPath (full scan)” during cursor
+tracking (up to 120 seconds, still off the GUI thread). Names/titles, language,
+AutomationIds and structural positions can change; validate saved locators in
+each automation session. Full-scan uniqueness is not a future-stability guarantee.
 
 ## Validation and release status
 

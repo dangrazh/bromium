@@ -56,7 +56,7 @@ struct State {
     dirty: HashMap<usize, Dirty>,
     epoch: u64,
     membership_at: Instant,
-    invalidated_at: HashMap<crate::ElementIdentity, u64>,
+    invalidated_at: HashMap<crate::ElementIdentity, (u64, CaptureKind)>,
     invalidation_floor: u64,
     capture_timeout: Duration,
     interest: HashMap<usize, Instant>,
@@ -152,9 +152,13 @@ impl TreeService {
         let s = self.shared.state.lock().unwrap();
         (s.epoch, s.excluded_process)
     }
+    pub(crate) fn point_host_hints(&self, x: i32, y: i32) -> Vec<Vec<crate::ElementIdentity>> {
+        crate::point::cached_host_hints(&self.shared.state.lock().unwrap().tree, x, y)
+    }
 
     /// Publish a positive point observation without certifying unrelated dirty
     /// descendants. It runs independently of a blocked background subtree capture.
+    #[cfg(test)]
     pub(crate) fn publish_point(
         &self,
         desktop: &crate::ElementIdentity,
@@ -163,6 +167,28 @@ impl TreeService {
         process: u32,
         started_epoch: u64,
         deadline: Instant,
+    ) -> Result<(UITree, usize), PointPublishError> {
+        self.publish_point_partial(
+            desktop,
+            observation,
+            target,
+            process,
+            started_epoch,
+            deadline,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn publish_point_partial(
+        &self,
+        desktop: &crate::ElementIdentity,
+        observation: crate::Observation,
+        target: &crate::ElementIdentity,
+        process: u32,
+        started_epoch: u64,
+        deadline: Instant,
+        partial_parents: &[crate::ElementIdentity],
     ) -> Result<(UITree, usize), PointPublishError> {
         let mut s = self.shared.state.lock().unwrap();
         if Instant::now() >= deadline {
@@ -216,11 +242,16 @@ impl TreeService {
         if !ancestry(&observation, target, &mut path) {
             return Err("Point observation does not contain target".into());
         }
-        if started_epoch < s.invalidation_floor
-            || s.invalidated_at
-                .iter()
-                .any(|(identity, &epoch)| epoch > started_epoch && path.contains(identity))
-        {
+        let overlap = s
+            .invalidated_at
+            .iter()
+            .find(|(identity, (epoch, _))| *epoch > started_epoch && path.contains(identity));
+        if started_epoch < s.invalidation_floor || overlap.is_some() {
+            log::debug!(
+                "point_invalidation target={target:?} started_epoch={started_epoch} current_epoch={} invalidation_floor={} overlap={overlap:?}",
+                s.epoch,
+                s.invalidation_floor
+            );
             return Err(PointPublishError::Invalidated);
         }
         let mut candidate = s.tree.clone();
@@ -229,6 +260,7 @@ impl TreeService {
             None => candidate.discover_window(observation.properties.clone())?,
         };
         candidate.commit(window, observation)?;
+        candidate.mark_partial_membership(partial_parents)?;
         let index = candidate
             .index_for_identity(target)
             .filter(|&id| candidate.is_descendant(id, window))
@@ -440,6 +472,38 @@ impl TreeService {
         }
         self.shared.changed.notify_all();
         self.ensure(title, deadline)
+    }
+
+    /// Explicitly requested, fresh full-desktop verification. Never substitutes
+    /// a new occurrence when the original point target disappears during capture.
+    pub fn verify_locator(
+        &self,
+        identity: &crate::ElementIdentity,
+        deadline: Instant,
+    ) -> Result<(UITree, usize), StaleTree> {
+        let tree = self.refresh(None, deadline)?;
+        let fail = |reason: String| StaleTree {
+            reason,
+            scope: None,
+            revision: tree.revision(),
+            coverage: "reusable locator verification".into(),
+        };
+        let index = tree.index_for_identity(identity).ok_or_else(|| {
+            fail("Original locator target disappeared or changed during full scan".into())
+        })?;
+        let locator = tree
+            .get_reusable_locator(index, false)
+            .map_err(|e| fail(e.to_string()))?;
+        let matches = tree.query(&locator.xpath).map_err(&fail)?;
+        if !locator.snapshot_unique || matches.len() != 1 || matches[0].identity() != *identity {
+            return Err(fail(
+                "Reusable locator is not unique in the full desktop snapshot".into(),
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(fail("Locator verification deadline expired".into()));
+        }
+        Ok((tree, index))
     }
     /// Membership only: useful for launch discovery without overwriting descendant coverage.
     pub fn membership(&self, deadline: Instant) -> Result<UITree, StaleTree> {
@@ -697,7 +761,8 @@ fn mark(s: &mut State, index: usize, kind: CaptureKind) {
         s.invalidation_floor = s.epoch;
     }
     if let Some((_, properties)) = s.tree.try_node(index) {
-        s.invalidated_at.insert(properties.identity(), s.epoch);
+        s.invalidated_at
+            .insert(properties.identity(), (s.epoch, kind));
     }
     if let Some(ancestor) = s
         .dirty
@@ -1251,6 +1316,74 @@ mod tests {
         }
     }
     #[test]
+    fn explicit_locator_verification_refreshes_all_windows_and_pins_target() {
+        struct Replay {
+            tree: UITree,
+            calls: Arc<Mutex<Vec<(Vec<i32>, CaptureKind)>>>,
+        }
+        impl Capture for Replay {
+            fn capture(
+                &mut self,
+                request: &CaptureRequest,
+                _: &AtomicBool,
+            ) -> Result<Observation, String> {
+                let raw = request
+                    .target
+                    .as_ref()
+                    .map(|p| p.get_runtime_id().to_vec())
+                    .unwrap_or(vec![42, 1]);
+                self.calls.lock().unwrap().push((raw.clone(), request.kind));
+                let id = self.tree.index_for_id(&raw).ok_or("target absent")?;
+                let mut result = self.tree.observation(id);
+                if request.kind == CaptureKind::Children {
+                    for child in result.children.iter_mut().flatten() {
+                        child.children = None;
+                    }
+                }
+                Ok(result)
+            }
+        }
+        let mut other = obs(4, Some(vec![]));
+        other.properties = SaveUIElement::fixture(4, "Other", "Window");
+        let tree = UITree::from_observation(obs(
+            1,
+            Some(vec![obs(2, Some(vec![obs(3, Some(vec![]))])), other]),
+        ))
+        .unwrap();
+        let identity = tree.node(tree.index_for_id(&[42, 3]).unwrap()).1.identity();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let replay = tree.clone();
+        let recorded = calls.clone();
+        let service = TreeService::with_capture(tree, move || Replay {
+            tree: replay,
+            calls: recorded,
+        });
+        let (fresh, target) = service
+            .verify_locator(&identity, Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(fresh.node(target).1.identity(), identity);
+        assert!(
+            fresh
+                .get_reusable_locator(target, false)
+                .unwrap()
+                .snapshot_unique
+        );
+        let records = calls.lock().unwrap();
+        for id in [2, 4] {
+            assert!(records.contains(&(vec![42, id], CaptureKind::Subtree)));
+        }
+        assert!(records.contains(&(vec![42, 1], CaptureKind::Children)));
+        drop(records);
+        let absent = SaveUIElement::fixture(999, "App", "Pane").identity();
+        assert!(
+            service
+                .verify_locator(&absent, Instant::now() + Duration::from_secs(2))
+                .unwrap_err()
+                .reason
+                .contains("disappeared")
+        );
+    }
+    #[test]
     fn snapshot_only_actions_and_descendants_fail_closed_across_refresh() {
         let rows = || {
             obs(
@@ -1298,6 +1431,71 @@ mod tests {
         assert!(service.live_request(&[42, 5], Some(healthy)).is_ok());
     }
 
+    #[test]
+    fn point_partial_publication_never_certifies_membership() {
+        let service = TreeService::with_capture(
+            UITree::from_observation(obs(1, Some(vec![obs(2, None)]))).unwrap(),
+            || Fake {
+                calls: Arc::default(),
+                delay: Duration::ZERO,
+            },
+        );
+        let desktop = service.snapshot().node(0).1.identity();
+        let mut window = obs(
+            2,
+            Some(vec![
+                obs(3, Some(vec![obs(4, Some(vec![]))])),
+                obs(5, Some(vec![])),
+            ]),
+        );
+        window.qualify(None);
+        let parent = window.properties.identity();
+        let target = window.children.as_ref().unwrap()[0]
+            .children
+            .as_ref()
+            .unwrap()[0]
+            .properties
+            .identity();
+        let (mut tree, id) = service
+            .publish_point_partial(
+                &desktop,
+                window,
+                &target,
+                456,
+                0,
+                Instant::now() + Duration::from_secs(2),
+                &[parent.clone()],
+            )
+            .unwrap();
+        let window_id = tree.index_for_identity(&parent).unwrap();
+        assert!(!tree.coverage(window_id).unwrap().children_observed);
+        assert!(
+            tree.coverage(window_id)
+                .unwrap()
+                .children_observed_at
+                .is_none()
+        );
+        assert!(!tree.has_complete_subtree(window_id));
+        assert!(tree.index_for_id(&[42, 5]).is_some());
+        for simple in [false, true] {
+            let xpath = tree.get_snapshot_xpath_for_element(id, simple).unwrap();
+            assert_eq!(xpath, format!("//*[@NodeKey='{}']", target.key()));
+            assert_eq!(tree.query(&xpath).unwrap().len(), 1);
+        }
+        assert!(
+            !service
+                .snapshot()
+                .coverage(window_id)
+                .unwrap()
+                .children_observed
+        );
+        tree.commit(window_id, obs(2, None)).unwrap();
+        assert!(!tree.coverage(window_id).unwrap().children_observed);
+        tree.commit(window_id, obs(2, Some(vec![obs(5, Some(vec![]))])))
+            .unwrap();
+        assert!(tree.coverage(window_id).unwrap().children_observed);
+        assert!(tree.index_for_identity(&target).is_none());
+    }
     #[test]
     fn point_publication_preserves_membership_and_rejects_excluded_or_wrong_desktop() {
         let service = TreeService::with_capture(

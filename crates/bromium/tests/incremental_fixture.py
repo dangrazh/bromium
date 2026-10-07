@@ -24,7 +24,7 @@ user.DispatchMessageW.argtypes = [c.POINTER(w.MSG)]
 user.DispatchMessageW.restype = c.c_ssize_t
 
 session = Path(os.environ["BROMIUM_FIXTURE_SESSION"]) if os.environ.get("BROMIUM_FIXTURE_SESSION") else None
-identity = session.name if session else str(os.getpid())
+identity = session.name if session else os.environ.get("BROMIUM_FIXTURE_IDENTITY", str(os.getpid()))
 titles = [f"Bromium Incremental A {identity}", f"Bromium Incremental B {identity}"]
 windows = [user.CreateWindowExW(0, "STATIC", title, 0x10CF0000,
                               100 + i * 160, 100 + i * 80, 420, 280,

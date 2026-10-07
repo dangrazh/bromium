@@ -46,6 +46,8 @@ pub struct UITree {
     initialized: bool,
     runtime_indices: HashMap<Vec<i32>, Vec<usize>>,
     point_locator: Option<usize>,
+    /// Parent links observed upward from a point hit, not enumerated membership.
+    partial_membership: HashSet<usize>,
 }
 
 impl UITree {
@@ -63,6 +65,7 @@ impl UITree {
             initialized: false,
             runtime_indices: HashMap::new(),
             point_locator: None,
+            partial_membership: HashSet::new(),
         }
     }
 
@@ -397,6 +400,9 @@ impl UITree {
     fn merge(&mut self, index: usize, observation: Observation) -> Result<(), String> {
         self.tree.node_mut(index).data = observation.properties;
         let complete = observation.children.is_some();
+        if complete {
+            self.partial_membership.remove(&index);
+        }
         let previous = self
             .coverage
             .get(&index)
@@ -449,6 +455,7 @@ impl UITree {
         Ok(())
     }
     fn remove_branch(&mut self, index: usize) -> Result<(), String> {
+        self.partial_membership.remove(&index);
         for child in self.children(index).to_vec() {
             self.remove_branch(child)?;
         }
@@ -520,6 +527,8 @@ impl UITree {
         start.push_attribute(("Name", props.get_name()));
         start.push_attribute(("ControlType", props.get_control_type()));
         start.push_attribute(("AutomationId", props.get_automation_id()));
+        start.push_attribute(("ClassName", props.get_classname()));
+        start.push_attribute(("FrameworkId", props.get_framework_id()));
         start.push_attribute(("z-order", order.as_str()));
         writer
             .write_event(Event::Start(start))
@@ -544,10 +553,48 @@ impl UITree {
         index: usize,
         simple: bool,
     ) -> Result<String, xmlutil::xpath_gen::XpathGenError> {
+        self.get_reusable_locator(index, simple)
+            .map(|locator| locator.xpath)
+    }
+
+    pub fn get_reusable_locator(
+        &self,
+        index: usize,
+        simple: bool,
+    ) -> Result<xmlutil::xpath_gen::ReusableLocator, xmlutil::xpath_gen::XpathGenError> {
+        let props = self
+            .try_node(index)
+            .ok_or_else(|| xmlutil::xpath_gen::XpathGenError::ElementNotFound(index.to_string()))?
+            .1;
+        let complete: HashSet<_> = self
+            .coverage
+            .iter()
+            .filter(|(_, c)| c.children_observed)
+            .map(|(&i, _)| self.node(i).1.identity().key())
+            .collect();
+        let snapshot_complete = self.point_locator.is_none() && self.has_complete_subtree(0);
+        xmlutil::xpath_gen::get_reusable_locator(
+            &props.identity().key(),
+            &self.xml_dom_tree,
+            simple,
+            &complete,
+            snapshot_complete,
+        )
+    }
+
+    /// Internal/debug locator. May contain session-specific occurrence identity.
+    pub fn get_snapshot_xpath_for_element(
+        &self,
+        index: usize,
+        simple: bool,
+    ) -> Result<String, xmlutil::xpath_gen::XpathGenError> {
         let id = self
             .try_node(index)
             .map(|(_, p)| p.identity().key())
             .unwrap_or_default();
+        if self.try_node(index).is_some() && self.has_partial_ancestor(index) {
+            return Ok(format!("//*[@NodeKey='{id}']"));
+        }
         if self.point_locator == Some(index) {
             return xmlutil::xpath_gen::get_xpath_spine_from_attribute(
                 "NodeKey",
@@ -577,6 +624,35 @@ impl UITree {
     }
     pub(crate) fn restrict_point_locator(&mut self, index: usize) {
         self.point_locator = Some(index);
+    }
+    pub(crate) fn mark_partial_membership(
+        &mut self,
+        identities: &[crate::ElementIdentity],
+    ) -> Result<(), String> {
+        for identity in identities {
+            let index = self
+                .index_for_identity(identity)
+                .ok_or("Partial parent missing after publication")?;
+            let coverage = self
+                .coverage
+                .get_mut(&index)
+                .ok_or("Partial parent lacks coverage")?;
+            coverage.children_observed = false;
+            coverage.children_observed_at = None;
+            self.partial_membership.insert(index);
+        }
+        Ok(())
+    }
+    fn has_partial_ancestor(&self, mut index: usize) -> bool {
+        loop {
+            if self.partial_membership.contains(&index) {
+                return true;
+            }
+            if index == 0 {
+                return false;
+            }
+            index = self.tree.node(index).parent;
+        }
     }
     pub(crate) fn has_complete_subtree(&self, index: usize) -> bool {
         self.coverage(index).is_some_and(|c| c.children_observed)
@@ -674,6 +750,26 @@ pub fn get_all_elements_par_xml(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn reusable_point_locator_does_not_embed_session_identity() {
+        let mut tree = super::UITree::from_observation(obs(
+            1,
+            "Desktop",
+            Some(vec![obs(
+                2,
+                "App",
+                Some(vec![obs(3, "File", Some(vec![]))]),
+            )]),
+        ))
+        .unwrap();
+        let target = tree.index_for_id(&[42, 3]).unwrap();
+        tree.restrict_point_locator(target);
+        let xpath = tree.get_xpath_for_element(target, false).unwrap();
+        assert!(
+            !xpath.contains("NodeKey"),
+            "session identity leaked: {xpath}"
+        );
+    }
+    #[test]
     fn office_identity_less_sibling_does_not_block_healthy_control() {
         let missing = Observation {
             properties: SaveUIElement::default(),
@@ -733,7 +829,7 @@ mod tests {
     }
     use super::*;
     #[test]
-    fn scoped_locator_requires_complete_window_and_falls_back_on_duplicates() {
+    fn scoped_locator_marks_partial_candidate_and_falls_back_on_duplicates() {
         let window = Observation {
             properties: SaveUIElement::fixture(2, "Notepad", "Window"),
             children: Some(vec![
@@ -746,13 +842,18 @@ mod tests {
         let unknown = tree.index_for_id(&[42, 4]).unwrap();
         assert!(
             !tree
-                .get_xpath_for_element(target, false)
+                .get_reusable_locator(target, false)
                 .unwrap()
-                .contains("//")
+                .snapshot_unique
         );
         tree.commit(unknown, obs(4, "Unknown", Some(vec![])))
             .unwrap();
         let scoped = tree.get_xpath_for_element(target, false).unwrap();
+        assert!(
+            tree.get_reusable_locator(target, false)
+                .unwrap()
+                .snapshot_unique
+        );
         assert!(scoped.ends_with("//Button[@Name='Settings']"));
         assert_eq!(tree.query(&scoped).unwrap()[0].get_runtime_id(), &[42, 3]);
         assert!(
@@ -935,7 +1036,11 @@ mod tests {
         );
         assert_eq!(t.revision(), before);
         for &id in &occurrences {
-            let xpath = t.get_xpath_for_element(id, false).unwrap();
+            assert!(
+                t.get_reusable_locator(id, false).is_err(),
+                "identical popup windows cannot be portably distinguished"
+            );
+            let xpath = t.get_snapshot_xpath_for_element(id, false).unwrap();
             let found = t.query(&xpath).unwrap();
             assert_eq!(found.len(), 1);
             assert_eq!(found[0].identity(), t.node(id).1.identity());

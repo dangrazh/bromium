@@ -142,6 +142,17 @@ struct Scan {
 }
 
 fn scan(tree: &UITree, window: usize, x: i32, y: i32, deadline: Instant) -> Scan {
+    scan_filtered(tree, window, x, y, deadline, false)
+}
+
+fn scan_filtered(
+    tree: &UITree,
+    window: usize,
+    x: i32,
+    y: i32,
+    deadline: Instant,
+    host: bool,
+) -> Scan {
     let mut result = Scan::default();
     let mut stack = vec![window];
     while !stack.is_empty()
@@ -161,7 +172,11 @@ fn scan(tree: &UITree, window: usize, x: i32, y: i32, deadline: Instant) -> Scan
         if matches!(props.get_control_type(), "Menu" | "MenuItem" | "MenuBar") {
             result.menus += 1;
         }
-        if menu_at_point(props, x, y) {
+        if if host {
+            bromium_common::rectangle::is_inside_rectangle(props.get_bounding_rectangle(), x, y)
+        } else {
+            menu_at_point(props, x, y)
+        } {
             result.candidates.push(index);
         }
         let available = 4096usize.saturating_sub(result.visited + stack.len());
@@ -178,6 +193,9 @@ pub(super) fn snapshot(tree: &UITree, target: usize, x: i32, y: i32, query: Opti
         return;
     };
     let window = tree.owning_window(target);
+    if super::host_probe::is_host(tree.node(target).1) {
+        host_snapshot(tree, target, window, x, y, query);
+    }
     let result = scan(
         tree,
         window,
@@ -236,9 +254,101 @@ pub(super) fn snapshot(tree: &UITree, target: usize, x: i32, y: i32, query: Opti
     );
 }
 
+fn host_snapshot(tree: &UITree, target: usize, window: usize, x: i32, y: i32, query: u64) {
+    let result = scan_filtered(
+        tree,
+        window,
+        x,
+        y,
+        Instant::now() + Duration::from_millis(10),
+        true,
+    );
+    for &index in &result.candidates {
+        let props = tree.node(index).1;
+        let mut ancestry = Vec::new();
+        let mut parent = index;
+        for _ in 0..64 {
+            let p = tree.node(parent).1;
+            ancestry.push(format!(
+                "node={parent} name={:?} type={} identity={:?}",
+                p.get_name(),
+                p.get_control_type(),
+                p.identity()
+            ));
+            if parent == window {
+                break;
+            }
+            parent = tree.get_tree().node(parent).parent;
+        }
+        log::debug!(
+            "point_host_probe query={query} stage=cached_candidate x={x} y={y} revision={} window={window} node={index} selected={} name={:?} control_type={} identity={:?} bounds={:?} class={:?} framework={:?} cached_is_offscreen={:?} properties_age_ms={:?} children_observed={:?} ancestry_leaf_to_window={ancestry:?}",
+            tree.revision(),
+            index == target,
+            props.get_name(),
+            props.get_control_type(),
+            props.identity(),
+            props.get_bounding_rectangle(),
+            props.get_classname(),
+            props.get_framework_id(),
+            props.diagnostic_offscreen,
+            tree.coverage(index)
+                .map(|c| c.observed_at.elapsed().as_millis()),
+            tree.coverage(index).map(|c| c.children_observed)
+        );
+    }
+    log::debug!(
+        "point_host_probe query={query} stage=cached_summary revision={} window={window} visited={} covering_cursor={} unobserved_branches={} truncated={} note=cached_evidence_not_occlusion_proof",
+        tree.revision(),
+        result.visited,
+        result.candidates.len(),
+        result.unobserved,
+        result.truncated
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_scan_includes_named_controls_without_menu_filter_and_preserves_tree() {
+        let tree = UITree::from_observation(crate::Observation {
+            properties: crate::SaveUIElement::fixture(1, "window", "Window")
+                .with_rectangle(0, 0, 100, 100),
+            children: Some(vec![crate::Observation {
+                properties: crate::SaveUIElement::fixture(2, "Suche", "ComboBox")
+                    .with_rectangle(0, 0, 100, 100),
+                children: None,
+            }]),
+        })
+        .unwrap();
+        let window = tree.index_for_id(&[42, 1]).unwrap();
+        let before = tree.get_xml_dom_tree().to_owned();
+        let result = scan_filtered(
+            &tree,
+            window,
+            50,
+            50,
+            Instant::now() + Duration::from_secs(1),
+            true,
+        );
+        assert_eq!(result.candidates.len(), 2);
+        assert_eq!(result.unobserved, 1);
+        assert_eq!(before, tree.get_xml_dom_tree());
+        assert!(
+            scan(
+                &tree,
+                window,
+                50,
+                50,
+                Instant::now() + Duration::from_secs(1)
+            )
+            .candidates
+            .is_empty()
+        );
+        let expired = scan_filtered(&tree, window, 50, 50, Instant::now(), true);
+        assert_eq!(expired.visited, 0);
+        assert!(expired.truncated);
+    }
     #[test]
     fn candidate_scan_is_window_scoped_bounded_and_read_only() {
         let node = |id, kind, children| crate::Observation {
@@ -270,6 +380,22 @@ mod tests {
         );
         assert_eq!(result.candidates.len(), 16);
         assert!(result.truncated);
+        let host_result = scan_filtered(
+            &tree,
+            window,
+            50,
+            50,
+            Instant::now() + Duration::from_secs(1),
+            true,
+        );
+        assert_eq!(host_result.candidates.len(), 16);
+        assert!(host_result.truncated);
+        assert!(
+            host_result
+                .candidates
+                .iter()
+                .all(|&id| tree.owning_window(id) == window)
+        );
         assert!(
             result
                 .candidates

@@ -138,6 +138,7 @@ impl Bromium {
 pub struct Element {
     name: String,
     xpath: String,
+    xpath_status: String,
     handle: isize,
     control_type: String,
     runtime_id: Vec<i32>,
@@ -172,6 +173,7 @@ impl Element {
         Element {
             name,
             xpath,
+            xpath_status: "provided".into(),
             handle,
             control_type,
             runtime_id,
@@ -230,6 +232,12 @@ impl Element {
     #[getter]
     pub fn xpath(&self) -> &str {
         &self.xpath
+    }
+
+    /// Candidate means uniqueness could not be established over complete coverage.
+    #[getter]
+    pub fn xpath_status(&self) -> &str {
+        &self.xpath_status
     }
 
     /// The native window handle (HWND) of this element.
@@ -336,6 +344,7 @@ impl Default for Element {
         Element {
             name: String::new(),
             xpath: String::new(),
+            xpath_status: "unavailable".into(),
             handle: 0,
             control_type: String::new(),
             service: None,
@@ -491,13 +500,7 @@ impl WinDriver {
         let bounding_rect = props.get_bounding_rectangle();
         let mut element = Element::new(
             props.get_name().to_string(),
-            props.get_xpath().map(str::to_owned).unwrap_or_else(|| {
-                if props.get_runtime_id().is_empty() {
-                    String::new()
-                } else {
-                    format!("//*[@NodeKey='{}']", props.identity().key())
-                }
-            }),
+            props.get_xpath().map(str::to_owned).unwrap_or_default(),
             props.get_handle(),
             props.get_control_type().to_string(),
             props.get_runtime_id().to_vec(),
@@ -510,6 +513,9 @@ impl WinDriver {
         );
         element.ancestor = props.identity().ancestor;
         element.occurrence = props.identity().occurrence;
+        if element.xpath.is_empty() {
+            element.xpath_status = "unavailable".into();
+        }
         element
     }
 
@@ -526,9 +532,8 @@ impl WinDriver {
 
     /// Collect all elements in the tree as Python `Element` objects.
     fn all_elements(&self) -> Vec<Element> {
-        self.service
-            .cached_view(self.window_title.as_deref())
-            .get_elements()
+        let tree = self.service.cached_view(self.window_title.as_deref());
+        tree.get_elements()
             .iter()
             .map(|uit| {
                 let mut element = self.attach(Self::element_from_save_ui(uit.get_element_props()));
@@ -738,11 +743,13 @@ impl WinDriver {
         self.refresh_ui_tree(py, window_title)
     }
 
+    #[pyo3(signature = (x, y, *, verify_xpath=false))]
     pub fn get_element_by_coordinates(
         &mut self,
         py: Python<'_>,
         x: i32,
         y: i32,
+        verify_xpath: bool,
     ) -> PyResult<Element> {
         let deadline = Instant::now() + Duration::from_millis(self.timeout_ms);
         let found = py
@@ -750,20 +757,39 @@ impl WinDriver {
                 uitree::resolve_point(&self.service, x, y, self.window_title.as_deref(), deadline)
             })
             .map_err(|e| stale_error(py, e))?;
-        let (tree, index) = found.ok_or_else(|| {
+        let (mut tree, mut index) = found.ok_or_else(|| {
             ElementNotFoundError::logged_err(format!(
                 "No exposed UIA element at ({x}, {y}) within scope {:?}",
                 self.window_title
             ))
         })?;
+        if verify_xpath {
+            let identity = tree.node(index).1.identity();
+            (tree, index) = py
+                .allow_threads(|| self.service.verify_locator(&identity, deadline))
+                .map_err(|e| stale_error(py, e))?;
+        }
         self.ui_tree = tree;
         let mut result = Self::element_from_save_ui(self.ui_tree.node(index).1);
-        result.xpath = self
+        let locator = self
             .ui_tree
-            .get_xpath_for_element(index, false)
+            .get_reusable_locator(index, false)
             .map_err(|e| {
                 TreeConstructionError::logged_err(format!("Point locator generation failed: {e}"))
             })?;
+        result.xpath = locator.xpath;
+        result.xpath_status = if locator.snapshot_unique {
+            "snapshot_unique"
+        } else {
+            "candidate"
+        }
+        .into();
+        if !locator.snapshot_unique {
+            log::warn!(
+                "Reusable XPath candidate: uniqueness is not verified over complete coverage; xpath={:?}",
+                result.xpath
+            );
+        }
         Ok(self.attach(result))
     }
 

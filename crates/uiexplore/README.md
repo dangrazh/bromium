@@ -29,10 +29,15 @@ to the inspector's service; the Python library retains its normal desktop view.
 worker, with at most one lookup in flight. Pointer movement is coalesced with a
 100 ms settling delay and a 250 ms cooldown; a stationary pointer is checked again
 one second after completion so newly opened menus can still be detected. The
-existing five-second point-query deadline applies. A slow or failed lookup does
+default five-second point-query deadline applies. A slow or failed lookup does
 not blank the previous selection: the toolbar identifies the captured revision
-and indicates when an update is pending. Tracking never requests a whole-window
+and indicates when an update is pending. Normal tracking never requests a whole-window
 refresh or uses cached rectangles to bypass provider hit testing.
+Teams native-host reconciliation is shared with Python: empty unnamed host panes
+can resolve to a unique live-validated control in the sibling WebView document,
+within the same deadline. Ambiguous candidates are not selected. The explicit
+**Verify XPath (full scan)** option instead requests a full exposed-desktop scan
+after point lookup, with a shared 120-second deadline; keep it off for narrow capture.
 
 Uncheck **Track Cursor** to freeze the displayed tree, selected properties and
 generated XPath. Escape also pauses when **UI Explore has keyboard focus** (it is
@@ -57,13 +62,20 @@ still exists.
 
 ## Generated locators
 
-With **Simple XPath** off, locators prefer a named descendant unique within the
-owning window (`.../Window[...]//Button[@Name='...']`). This avoids intermediate
-pane indices that change when tooltips appear. This shortcut requires complete
-cached window coverage; partially captured windows, unnamed controls, and ambiguous
-names use the existing full-path fallback. Generating a locator does not request
-additional capture. **Simple XPath** retains the positional format. Names and
-window identity can still change, so generated locators are not permanent IDs.
+Locators use semantic window anchors and prefer AutomationId/Name descendants,
+avoiding incidental pane indices. No copied locator embeds runtime IDs, handles
+or NodeKey. Partial coverage is explicitly labelled **Candidate — uniqueness not
+verified**. **Simple XPath** prefers structural steps below the semantic window
+anchor; positions require complete sibling enumeration. Indistinguishable windows
+or unsafe structural steps show an error and disable copying instead of falling
+back to a session identity. Generating a candidate does not acquire more state.
+
+Enable **Verify XPath (full scan)** before cursor tracking to force fresh full
+desktop coverage before accepting a result. The original target must still exist
+and the locator must identify it uniquely. Self-exclusion remains in effect.
+Verification can time out, or fail for transient popups omitted by enumeration.
+Names, titles, AutomationIds, language and layout may change in later sessions:
+snapshot uniqueness is not a permanent-identity guarantee.
 
 ## Regression tests
 

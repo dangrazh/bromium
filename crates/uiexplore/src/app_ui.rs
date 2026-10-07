@@ -276,6 +276,7 @@ pub struct UIExplorer {
     show_history: bool,
     highlighting: bool,
     simple_xpath: bool,
+    verify_xpath: bool,
     xpath_input: Option<String>,
     xpath_eval_result: Option<XpathResult>,
     xpath_highlighting: bool,
@@ -315,6 +316,7 @@ impl UIExplorer {
             show_history: false,
             highlighting: false,
             simple_xpath: false,
+            verify_xpath: false,
             xpath_input: None,
             xpath_eval_result: None,
             xpath_highlighting: false,
@@ -537,7 +539,8 @@ impl UIExplorer {
                         ui.label(" | ");
                         ui.add_space(2.0);
 
-                        ui.checkbox(&mut self.simple_xpath, "Simple XPath").on_hover_text("When enabled, the generated XPath will avoid using the Name attribute even if it is unique. This can be useful when a pure positional path is desired.");
+                        ui.checkbox(&mut self.simple_xpath, "Simple XPath").on_hover_text("Prefer structural steps below a semantic window anchor. Positions require enumerated siblings.");
+                        ui.checkbox(&mut self.verify_xpath, "Verify XPath (full scan)").on_hover_text("Opt-in: fresh full-desktop capture on cursor lookup, up to 120 seconds. May fail for transient popups; ordinary capture stays narrow.");
 
                         ui.add_space(2.0);
                         ui.label(" | ");
@@ -689,16 +692,22 @@ impl UIExplorer {
                             ui.label(active_element.get_automation_id().to_owned());
                             ui.end_row();
 
-                            let xpath = self
+                            let locator = self
                                 .ui_tree
-                                .get_xpath_for_element(
+                                .get_reusable_locator(
                                     state.active_ui_element.unwrap_or(0),
                                     self.simple_xpath,
-                                )
-                                .unwrap_or_default();
+                                );
                             ui.label("XPath:");
-                            ui.label(xpath.clone());
-                            if ui.button("📋").clicked() {
+                            let xpath = locator.as_ref().map(|l| l.xpath.clone()).unwrap_or_default();
+                            match &locator {
+                                Ok(locator) => {
+                                    ui.label(&locator.xpath);
+                                    ui.label(if locator.snapshot_unique { "Unique in captured snapshot; revalidate in later sessions" } else { "Candidate — uniqueness not verified (partial/dirty capture)" });
+                                }
+                                Err(error) => { ui.label(error.to_string()); }
+                            }
+                            if ui.add_enabled(locator.is_ok(), egui::Button::new("📋")).clicked() {
                                 ui.ctx().copy_text(xpath);
                                 self.set_status(
                                     "XPath copied to clipboard".to_string(),
@@ -971,14 +980,18 @@ impl UIExplorer {
             let service = self.service.clone();
             let (tx, rx) = channel();
             let wake = ctx.clone();
+            let verify_xpath = self.verify_xpath;
             thread::spawn(move || {
-                let result = uitree::resolve_point(
-                    &service,
-                    position.x,
-                    position.y,
-                    None,
-                    std::time::Instant::now() + std::time::Duration::from_secs(5),
-                );
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_secs(if verify_xpath { 120 } else { 5 });
+                let result =
+                    uitree::resolve_point(&service, position.x, position.y, None, deadline)
+                        .and_then(|found| match found {
+                            Some((tree, index)) if verify_xpath => service
+                                .verify_locator(&tree.node(index).1.identity(), deadline)
+                                .map(Some),
+                            other => Ok(other),
+                        });
                 let _ = tx.send(result);
                 wake.request_repaint();
             });

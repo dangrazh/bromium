@@ -8,7 +8,9 @@ impl log::Log for PointLogger {
         metadata.level() <= log::Level::Debug
     }
     fn log(&self, record: &log::Record<'_>) {
-        if record.target().ends_with("point::diagnostics") {
+        if record.target().ends_with("point::diagnostics")
+            || record.target().ends_with("point::probe")
+        {
             eprintln!("{}", record.args());
         }
     }

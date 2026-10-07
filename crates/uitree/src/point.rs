@@ -9,6 +9,10 @@ use windows::Win32::{
 };
 #[path = "point_diagnostics.rs"]
 mod diagnostics;
+#[path = "point_host.rs"]
+mod host;
+#[path = "point_host_probe.rs"]
+mod host_probe;
 #[path = "point_menu.rs"]
 mod menu;
 #[path = "point_mismatch.rs"]
@@ -84,6 +88,13 @@ fn stale(service: &TreeService, title: Option<&str>, reason: impl Into<String>) 
     }
 }
 
+pub(crate) fn cached_host_hints(tree: &UITree, x: i32, y: i32) -> Vec<Vec<crate::ElementIdentity>> {
+    let Some(window) = window_at_point(x, y).and_then(|h| cached_region(tree, h)) else {
+        return vec![];
+    };
+    host::cached_hints(tree, window, x, y)
+}
+
 fn in_scope(tree: &UITree, region: usize, native: &NativePoint, title: Option<&str>) -> bool {
     let Some(title) = title else {
         return true;
@@ -129,7 +140,15 @@ pub fn resolve_point(
         title,
         deadline,
         || native_point(x, y),
-        || probe::ancestors(x, y, deadline, service.point_capture_context().1),
+        || {
+            probe::ancestors(
+                x,
+                y,
+                deadline,
+                service.point_capture_context().1,
+                service.point_host_hints(x, y),
+            )
+        },
     );
     match &result {
         Err(error) => log::debug!(
@@ -214,13 +233,14 @@ fn resolve_point_with(
             ));
         }
         expected_target = Some(identity);
-        let (tree, id) = match service.publish_point(
+        let (tree, id) = match service.publish_point_partial(
             desktop,
             discovery.observation,
             target,
             process,
             epoch,
             deadline,
+            &discovery.partial_parents,
         ) {
             Ok(result) => result,
             Err(crate::service::PointPublishError::Invalidated) => {
@@ -338,6 +358,7 @@ mod tests {
             .properties
             .identity();
         let discovery = probe::Discovery {
+            partial_parents: vec![],
             diagnostic_id: None,
             path: vec![target, desktop.properties.identity()],
             window: Some((window.properties.clone(), 456)),
@@ -394,8 +415,14 @@ mod tests {
         );
         let xpath = tree.get_xpath_for_element(id, false).unwrap();
         assert!(
-            xpath.contains("NodeKey"),
-            "partial coverage requires an identity-scoped anchor: {xpath}"
+            !xpath.contains("NodeKey"),
+            "reusable candidate must not leak session identity: {xpath}"
+        );
+        assert!(
+            !tree
+                .get_reusable_locator(id, false)
+                .unwrap()
+                .snapshot_unique
         );
         assert_eq!(
             tree.query(&xpath).unwrap()[0].identity(),
