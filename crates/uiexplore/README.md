@@ -35,7 +35,11 @@ and indicates when an update is pending. Normal tracking never requests a whole-
 refresh or uses cached rectangles to bypass provider hit testing.
 Teams native-host reconciliation is shared with Python: empty unnamed host panes
 can resolve to a unique live-validated control in the sibling WebView document,
-within the same deadline. Ambiguous candidates are not selected. The explicit
+within the same deadline. Ambiguous candidates are not selected.
+XAML light-dismiss reconciliation likewise returns a unique logical menu heading
+beneath a recognized dismissal layer, with live ancestry and active-menu checks.
+This supports locator inspection: a physical click may still go to the dismissal
+layer. Lookup does not close the menu. The explicit
 **Verify XPath (full scan)** option instead requests a full exposed-desktop scan
 after point lookup, with a shared 120-second deadline; keep it off for narrow capture.
 

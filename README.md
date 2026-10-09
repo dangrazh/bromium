@@ -56,6 +56,13 @@ For empty unnamed Chromium host panes in `TeamsWebView` windows, a bounded
 same-window search reconciles the hit with a unique live-validated WebView control.
 Cached identities guide traversal only; ambiguous matches fail closed. This shared
 Python/UI Explore path retains the original deadline and does not scan the desktop.
+Known XAML `PopupRoot` / `Light Dismiss` layers over menu bars are reconciled to
+a unique live-validated menu heading while the same application's flyout is active.
+This is **logical locator discovery**, not a guarantee of the physical click target:
+the dismissal layer may still receive a click. Python callers can disable this
+specific reconciliation with `resolve_xaml_overlays=False`; provider ancestry
+inconsistencies may then still raise `StaleTreeError`. No menu is closed or clicked
+by lookup, and overlay/menu identity is checked through capture and retries.
 Transient publication invalidations allow up to three narrow capture attempts
 within that same deadline, without switching target identity or native window.
 Debug `point_retry` explains retry decisions; `point_ancestry_mismatch` records

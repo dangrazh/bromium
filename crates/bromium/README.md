@@ -136,6 +136,26 @@ captured; `IsOffscreen=false` is not proof that an element is visually unobscure
 This instrumentation does not select candidates, refresh menu branches, or change
 cursor-tracking behaviour. It is disabled below Debug level.
 
+Coordinate lookup defaults to logical menu-heading discovery through known XAML
+light-dismiss layers. The gate requires framework `XAML`, class `PopupRoot`, type
+`Button`, and AutomationId `Light Dismiss` (not its localized name), a live
+`InputSiteWindowClass` parent, and a focused visible flyout item in the same
+application window. Only immediate menu bars and their headings are inspected;
+the pointer must be outside the active dropdown and over a unique exposed heading.
+Bounds, visibility and occurrence ancestry are validated live. The overlay and
+active-menu identities must survive final verification and invalidation retries.
+This bounded search shares the query deadline and never closes the menu or
+captures a whole window. Ambiguity and inconsistent identity fail closed.
+
+The returned heading is a **logical locator target**, not necessarily the layer
+that receives a physical click while the menu is open. To disable this specific
+reconciliation, use `driver.get_element_by_coordinates(x, y, resolve_xaml_overlays=False)`.
+This does not disable the existing menu/Teams reconciliation or bypass freshness
+checks; a provider's inconsistent dismissal-overlay ancestry can still raise
+`StaleTreeError`. Debug `point_xaml_dismiss` records the provider hit, logical
+target and active menu; `initial_xaml_reconciled` / `verification_xaml_reconciled`
+record both capture stages.
+
 Coordinate lookup also reconciles an empty, unnamed `Chrome_WidgetWin_*` pane
 inside the observed `TeamsWebView` window structure with a unique point-covering
 interactive control in its sibling Chrome document. Cached identity paths only

@@ -41,7 +41,7 @@ def br_get_xpath():
         print(f"Element XPath: {element.xpath}")
         print(f"XPath status: {element.xpath_status}")
     
-    except (bromium.ElementNotFoundError, AttributeError, RuntimeError, ValueError) as e:
+    except (bromium.StaleTreeError, bromium.ElementNotFoundError, AttributeError, RuntimeError, ValueError) as e:
         print(f"Error while trying to get XPath: {e}")
 
 @wrap.simple

@@ -11,6 +11,7 @@ use std::{
 #[derive(Clone, Debug)]
 pub(super) struct Discovery {
     pub diagnostic_id: Option<u64>,
+    pub dismiss_context: Option<super::menu::DismissContext>,
     pub path: Vec<ElementIdentity>,
     pub window: Option<(SaveUIElement, u32)>,
     /// Immediate children along the hit ancestry; `partial_parents` explicitly
@@ -25,6 +26,7 @@ struct Job {
     deadline: Instant,
     excluded_process: Option<u32>,
     host_hints: Vec<Vec<ElementIdentity>>,
+    resolve_xaml_overlays: bool,
     result: SyncSender<Result<Discovery, String>>,
 }
 
@@ -34,6 +36,7 @@ pub(super) fn ancestors(
     deadline: Instant,
     excluded_process: Option<u32>,
     host_hints: Vec<Vec<ElementIdentity>>,
+    resolve_xaml_overlays: bool,
 ) -> Result<Discovery, String> {
     static QUEUE: OnceLock<SyncSender<Job>> = OnceLock::new();
     if Instant::now() >= deadline {
@@ -53,6 +56,7 @@ pub(super) fn ancestors(
                         job.deadline,
                         job.excluded_process,
                         &job.host_hints,
+                        job.resolve_xaml_overlays,
                     )
                 })
                 .unwrap_or_else(|_| Err("Point discovery worker panicked".into()));
@@ -69,6 +73,7 @@ pub(super) fn ancestors(
             deadline,
             excluded_process,
             host_hints,
+            resolve_xaml_overlays,
             result: tx,
         })
         .map_err(|_| "Point discovery capacity unavailable")?;
@@ -84,6 +89,7 @@ fn discover(
     deadline: Instant,
     excluded_process: Option<u32>,
     host_hints: &[Vec<ElementIdentity>],
+    resolve_xaml_overlays: bool,
 ) -> Result<Discovery, String> {
     let check = || {
         if Instant::now() < deadline {
@@ -130,6 +136,12 @@ fn discover(
         host_hints,
     )?;
     diagnostic.element("initial_host_reconciled", &element, &automation);
+    let (mut element, dismiss_context) = if resolve_xaml_overlays {
+        super::menu::reconcile_dismiss(&automation, element, x, y, deadline)?
+    } else {
+        (element, None)
+    };
+    diagnostic.element("initial_xaml_reconciled", &element, &automation);
     let mut path = Vec::new();
     let mut elements = Vec::new();
     for depth in 0..64 {
@@ -350,6 +362,17 @@ fn discover(
                     host_hints,
                 )?;
                 diagnostic.element("verification_host_reconciled", &hit, &automation);
+                let (hit, verified_dismiss_context) = if resolve_xaml_overlays {
+                    super::menu::reconcile_dismiss(&automation, hit, x, y, deadline)?
+                } else {
+                    (hit, None)
+                };
+                if dismiss_context != verified_dismiss_context {
+                    return Err(
+                        "XAML dismissal overlay or active menu changed during point capture".into(),
+                    );
+                }
+                diagnostic.element("verification_xaml_reconciled", &hit, &automation);
                 if !path[0].matches_live(&hit) {
                     return Err("Point target changed during narrow capture".into());
                 }
@@ -376,6 +399,7 @@ fn discover(
                 );
                 return Ok(Discovery {
                     diagnostic_id: diagnostic.id,
+                    dismiss_context,
                     path,
                     window,
                     observation,
@@ -558,7 +582,7 @@ mod tests {
     #[test]
     fn expired_point_discovery_does_not_start_provider_work() {
         assert!(
-            ancestors(0, 0, Instant::now(), None, vec![])
+            ancestors(0, 0, Instant::now(), None, vec![], true)
                 .unwrap_err()
                 .contains("deadline")
         );

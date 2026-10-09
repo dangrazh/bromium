@@ -436,7 +436,7 @@ class WinDriver:
 
     # ─── Element lookup ───────────────────────────────────────────────────
 
-    def get_element_by_coordinates(self, x: int, y: int, *, verify_xpath: bool = False) -> Element:
+    def get_element_by_coordinates(self, x: int, y: int, *, verify_xpath: bool = False, resolve_xaml_overlays: bool = True) -> Element:
         """
         Find the UI element at the given screen coordinates.
 
@@ -449,13 +449,20 @@ class WinDriver:
         Args:
             x: The x screen coordinate.
             y: The y screen coordinate.
+            resolve_xaml_overlays: Reconcile known XAML Light Dismiss overlays
+                over a menu bar to a unique live-validated menu heading. Default
+                True is logical locator discovery, not physical click-target
+                detection. False disables only this reconciliation; provider
+                ancestry inconsistencies may still raise StaleTreeError.
             verify_xpath: Force a fresh full-desktop scan before generating the
                 locator, ignoring window_title only for scan/uniqueness scope.
                 Uses the same timeout_ms deadline, retains the original target,
                 and fails if full coverage or uniqueness cannot be established.
 
         Returns:
-            The exposed hit-test element in the native window under the point.
+            The exposed element or narrowly reconciled logical target in the
+            native window under the point. A logical menu heading may be behind
+            a light-dismiss input layer; clicking there can dismiss the menu.
             A reusable XPath using a semantic window anchor and AutomationId/Name,
             with structural fallback where siblings were enumerated. Partial
             coverage yields xpath_status='candidate', explicitly unverified.

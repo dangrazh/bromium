@@ -23,7 +23,10 @@ mod event_handler;
 mod service;
 pub use service::{StaleTree, TreeService};
 mod point;
-pub use point::{cached_region, element_at_point, resolve_point, window_at_point};
+pub use point::{
+    cached_region, element_at_point, resolve_point, resolve_point_with_xaml_overlays,
+    window_at_point,
+};
 
 mod uiexplore_xml;
 pub use uiexplore_xml::{

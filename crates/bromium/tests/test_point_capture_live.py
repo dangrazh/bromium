@@ -49,7 +49,8 @@ class PointCaptureLiveTests(unittest.TestCase):
                           "verification_control_view", "verification_menu_reconciled",
                           "cached_menus"):
                 self.assertIn(f"stage={stage}", result.stderr)
-            for stage in ("initial_host_reconciled", "verification_host_reconciled"):
+            for stage in ("initial_host_reconciled", "verification_host_reconciled",
+                          "initial_xaml_reconciled", "verification_xaml_reconciled"):
                 self.assertIn(f"stage={stage}", result.stderr)
             self.assertIn("point_hit_probe query=", result.stderr)
             self.assertIn("point_capture_timing query=", result.stderr)

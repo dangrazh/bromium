@@ -10,6 +10,150 @@ use uiautomation::{
 const NODE_LIMIT: usize = 256;
 const DEPTH_LIMIT: usize = 64;
 
+fn dismiss_signature(xaml: bool, button: bool, class: &str, automation_id: &str) -> bool {
+    xaml && button && class == "PopupRoot" && automation_id == "Light Dismiss"
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DismissContext {
+    overlay: ElementIdentity,
+    menu: ElementIdentity,
+    owner: ElementIdentity,
+}
+
+fn select_dismiss<S: Source>(
+    source: &mut S,
+    raw: S::Node,
+) -> Result<(S::Node, Option<DismissContext>), String> {
+    let info = source.info(&raw)?;
+    if !info.dismiss || info.offscreen || !info.contains {
+        return Ok((raw, None));
+    }
+    let hit = full_ancestry(source, raw.clone())?;
+    let Some((site, site_info)) = hit
+        .get(1)
+        .filter(|(_, p)| p.input_site && p.identity.handle != 0 && p.contains && !p.offscreen)
+    else {
+        return Ok((raw, None));
+    };
+    let Some((_, owner)) = hit.iter().find(|(_, p)| p.window && p.identity.handle != 0) else {
+        return Ok((raw, None));
+    };
+    let Some(focus) = source.focus()? else {
+        return Ok((raw, None));
+    };
+    let focused = full_ancestry(source, focus)?;
+    if focused
+        .first()
+        .is_none_or(|(_, p)| !p.flyout_item || p.offscreen)
+        || !focused.iter().any(|(_, p)| p.identity == owner.identity)
+    {
+        return Ok((raw, None));
+    }
+    // Never look through the dropdown itself. Only its outside dismissal layer
+    // over an independently exposed menu bar can be reconciled.
+    let Some((_, menu)) = focused.iter().find(|(_, p)| p.menu && !p.offscreen) else {
+        return Ok((raw, None));
+    };
+    if focused
+        .iter()
+        .any(|(_, p)| p.menu && p.contains && !p.offscreen)
+    {
+        return Ok((raw, None));
+    }
+    let mut remaining = NODE_LIMIT;
+    let mut selected = None;
+    for bar in source.children(site)? {
+        spend(&mut remaining)?;
+        let mut bar_info = source.info(&bar)?;
+        if !bar_info.menu_bar || !bar_info.contains || bar_info.offscreen {
+            continue;
+        }
+        bar_info.identity.qualify(Some(&site_info.identity));
+        if !bar_info.identity.is_resolvable() {
+            return Err("XAML menu bar has missing identity".into());
+        }
+        for heading in source.children(&bar)? {
+            spend(&mut remaining)?;
+            let mut heading_info = source.info(&heading)?;
+            if !heading_info.heading || !heading_info.contains || heading_info.offscreen {
+                continue;
+            }
+            heading_info.identity.qualify(Some(&bar_info.identity));
+            if !heading_info.identity.is_resolvable() {
+                return Err("XAML menu heading has missing identity".into());
+            }
+            if selected.is_some() {
+                return Err("Ambiguous XAML menu headings beneath dismissal layer".into());
+            }
+            selected = Some((heading, heading_info.identity));
+        }
+    }
+    let Some((heading, expected)) = selected else {
+        return Ok((raw, None));
+    };
+    let checked = full_ancestry(source, heading.clone())?;
+    if checked
+        .first()
+        .is_none_or(|(_, p)| p.identity != expected || !p.heading || !p.contains || p.offscreen)
+        || !checked
+            .iter()
+            .any(|(_, p)| p.identity == site_info.identity)
+        || !checked.iter().any(|(_, p)| p.identity == owner.identity)
+    {
+        return Err("XAML menu heading changed during verification".into());
+    }
+    let context = DismissContext {
+        overlay: hit[0].1.identity.clone(),
+        menu: menu.identity.clone(),
+        owner: owner.identity.clone(),
+    };
+    log::debug!(
+        "point_xaml_dismiss result=logical_menu_heading provider_hit={:?} selected={expected:?} active_menu={:?} owner={:?} inspected={} note=not_a_physical_click_target",
+        context.overlay,
+        context.menu,
+        context.owner,
+        NODE_LIMIT - remaining
+    );
+    Ok((heading, Some(context)))
+}
+
+fn spend(remaining: &mut usize) -> Result<(), String> {
+    if *remaining == 0 {
+        return Err("XAML dismissal search node limit exceeded".into());
+    }
+    *remaining -= 1;
+    Ok(())
+}
+
+// Popup bridge windows can be nested below their application window in UIA.
+// Keep the complete ancestry to prove common ownership, not just common desktop.
+fn full_ancestry<S: Source>(
+    source: &mut S,
+    mut node: S::Node,
+) -> Result<Vec<(S::Node, Info)>, String> {
+    let mut path = Vec::new();
+    for _ in 0..DEPTH_LIMIT {
+        let info = source.info(&node)?;
+        if !info.identity.is_resolvable() {
+            return Err("XAML dismissal ancestry has missing identity".into());
+        }
+        path.push((node.clone(), info));
+        match source.parent(&node)? {
+            Some(parent) => node = parent,
+            None => {
+                let mut ids: Vec<_> = path.iter().map(|(_, p)| p.identity.clone()).collect();
+                ElementIdentity::qualify_path(&mut ids);
+                for ((_, p), id) in path.iter_mut().zip(ids) {
+                    p.identity = id;
+                }
+                return Ok(path);
+            }
+        }
+    }
+    Err("XAML dismissal ancestry depth limit exceeded".into())
+}
+
 fn check_deadline(deadline: Instant) -> Result<(), String> {
     if Instant::now() >= deadline {
         Err("Menu point discovery deadline expired".into())
@@ -25,6 +169,11 @@ struct Info {
     window: bool,
     contains: bool,
     offscreen: bool,
+    dismiss: bool,
+    input_site: bool,
+    menu_bar: bool,
+    heading: bool,
+    flyout_item: bool,
 }
 
 trait Source {
@@ -189,6 +338,9 @@ impl Source for Live<'_> {
         let rect = cached
             .get_cached_bounding_rectangle()
             .map_err(|e| e.to_string())?;
+        let class = cached.get_cached_classname().unwrap_or_default();
+        let xaml = cached.get_cached_framework_id().unwrap_or_default() == "XAML";
+        let automation_id = cached.get_cached_automation_id().unwrap_or_default();
         Ok(Info {
             identity: ElementIdentity {
                 runtime_id: cached.get_runtime_id().unwrap_or_default(),
@@ -203,6 +355,18 @@ impl Source for Live<'_> {
             window: kind == ControlType::Window,
             contains: bromium_common::rectangle::is_inside_rectangle(&rect, self.x, self.y),
             offscreen: cached.is_cached_offscreen().map_err(|e| e.to_string())?,
+            dismiss: dismiss_signature(xaml, kind == ControlType::Button, &class, &automation_id),
+            input_site: xaml && kind == ControlType::Pane && class == "InputSiteWindowClass",
+            menu_bar: xaml && kind == ControlType::MenuBar,
+            heading: xaml
+                && kind == ControlType::MenuItem
+                && class == "Microsoft.UI.Xaml.Controls.MenuBarItem",
+            flyout_item: xaml
+                && kind == ControlType::MenuItem
+                && matches!(
+                    class.as_str(),
+                    "MenuFlyoutItem" | "MenuFlyoutSubItem" | "ToggleMenuFlyoutItem"
+                ),
         })
     }
     fn parent(&mut self, node: &UIElement) -> Result<Option<UIElement>, String> {
@@ -252,6 +416,9 @@ pub(super) fn reconcile(
         UIProperty::ControlType,
         UIProperty::BoundingRectangle,
         UIProperty::IsOffscreen,
+        UIProperty::ClassName,
+        UIProperty::FrameworkId,
+        UIProperty::AutomationId,
     ] {
         cache.add_property(property).map_err(|e| e.to_string())?;
     }
@@ -267,6 +434,56 @@ pub(super) fn reconcile(
         process,
     };
     select(&mut source, raw)
+}
+
+pub(super) fn reconcile_dismiss(
+    automation: &UIAutomation,
+    raw: UIElement,
+    x: i32,
+    y: i32,
+    deadline: Instant,
+) -> Result<(UIElement, Option<DismissContext>), String> {
+    check_deadline(deadline)?;
+    // Avoid probing unrelated controls or changing their existing lookup route.
+    if raw.get_classname().ok().as_deref() != Some("PopupRoot") {
+        return Ok((raw, None));
+    }
+    check_deadline(deadline)?;
+    let process = raw.get_process_id().map_err(|e| e.to_string())?;
+    let cache = automation
+        .create_cache_request()
+        .map_err(|e| e.to_string())?;
+    for property in [
+        UIProperty::RuntimeId,
+        UIProperty::NativeWindowHandle,
+        UIProperty::ControlType,
+        UIProperty::BoundingRectangle,
+        UIProperty::IsOffscreen,
+        UIProperty::ClassName,
+        UIProperty::FrameworkId,
+        UIProperty::AutomationId,
+    ] {
+        cache.add_property(property).map_err(|e| e.to_string())?;
+    }
+    let mut source = Live {
+        automation,
+        walker: automation
+            .get_control_view_walker()
+            .map_err(|e| e.to_string())?,
+        cache,
+        deadline,
+        x,
+        y,
+        process,
+    };
+    let (selected, context) = select_dismiss(&mut source, raw)?;
+    if context.is_some() {
+        check_deadline(deadline)?;
+        if selected.get_process_id().map_err(|e| e.to_string())? != process {
+            return Err("XAML menu heading belongs to a different process".into());
+        }
+    }
+    Ok((selected, context))
 }
 
 #[cfg(test)]
@@ -294,7 +511,9 @@ mod tests {
                 .nodes
                 .iter()
                 .enumerate()
-                .filter_map(|(i, (_, p))| (*p == Some(*node)).then_some(i))
+                // XAML exposes the dismissal layer upwards but omits it from
+                // its parent's children, as observed in the Notepad provider.
+                .filter_map(|(i, (info, p))| (*p == Some(*node) && !info.dismiss).then_some(i))
                 .collect())
         }
     }
@@ -315,6 +534,11 @@ mod tests {
                             window: i == 0,
                             contains: true,
                             offscreen: i == 3,
+                            dismiss: false,
+                            input_site: false,
+                            menu_bar: false,
+                            heading: false,
+                            flyout_item: false,
                         },
                         match i {
                             0 => None,
@@ -327,6 +551,126 @@ mod tests {
             focus: Some(3),
             enumerated: vec![],
         }
+    }
+    fn dismiss_fixture() -> Fixture {
+        let base = fixture().nodes[1].0.clone();
+        let mut nodes = Vec::new();
+        for i in 0..8 {
+            let mut info = base.clone();
+            info.identity.runtime_id = vec![42, i as i32 + 1];
+            info.identity.handle = match i {
+                0 => 100,
+                1 => 101,
+                5 => 200,
+                _ => 0,
+            };
+            info.window = i == 0 || i == 5;
+            info.input_site = i == 1;
+            info.dismiss = i == 2;
+            info.menu_bar = i == 3;
+            info.heading = i == 4;
+            info.menu = i == 6;
+            info.flyout_item = i == 7;
+            info.contains = i < 5;
+            nodes.push((
+                info,
+                match i {
+                    0 => None,
+                    1 | 5 => Some(0),
+                    2 | 3 => Some(1),
+                    4 => Some(3),
+                    6 => Some(5),
+                    _ => Some(6),
+                },
+            ));
+        }
+        Fixture {
+            nodes,
+            focus: Some(7),
+            enumerated: vec![],
+        }
+    }
+    #[test]
+    fn xaml_light_dismiss_returns_menu_heading_not_dismiss_button() {
+        let mut source = dismiss_fixture();
+        let (node, context) = select_dismiss(&mut source, 2).unwrap();
+        assert_eq!(node, 4);
+        assert!(context.is_some());
+        assert_eq!(source.enumerated, vec![1, 3]);
+    }
+    #[test]
+    fn xaml_signature_is_specific_and_does_not_depend_on_localized_name() {
+        assert!(dismiss_signature(true, true, "PopupRoot", "Light Dismiss"));
+        for (xaml, button, class, id) in [
+            (false, true, "PopupRoot", "Light Dismiss"),
+            (true, false, "PopupRoot", "Light Dismiss"),
+            (true, true, "Popup", "Light Dismiss"),
+            (true, true, "PopupRoot", "Schließen"),
+        ] {
+            assert!(!dismiss_signature(xaml, button, class, id));
+        }
+    }
+    #[test]
+    fn xaml_requires_known_overlay_site_and_active_same_owner_flyout() {
+        for mode in 0..7 {
+            let mut s = dismiss_fixture();
+            match mode {
+                0 => s.nodes[2].0.dismiss = false,
+                1 => s.nodes[1].0.input_site = false,
+                2 => s.focus = None,
+                3 => s.nodes[7].0.flyout_item = false,
+                4 => s.nodes[6].0.offscreen = true,
+                5 => s.nodes[5].1 = None,
+                _ => s.nodes[6].0.contains = true,
+            }
+            assert_eq!(select_dismiss(&mut s, 2).unwrap().0, 2);
+            assert!(s.enumerated.is_empty());
+        }
+    }
+    #[test]
+    fn xaml_never_uses_hidden_or_offpoint_or_nonheading_controls() {
+        for mode in 0..4 {
+            let mut s = dismiss_fixture();
+            match mode {
+                0 => s.nodes[4].0.contains = false,
+                1 => s.nodes[4].0.offscreen = true,
+                2 => s.nodes[4].0.heading = false,
+                _ => s.nodes[3].0.offscreen = true,
+            }
+            assert_eq!(select_dismiss(&mut s, 2).unwrap().0, 2);
+        }
+    }
+    #[test]
+    fn xaml_duplicate_or_identityless_heading_is_not_selected() {
+        let mut s = dismiss_fixture();
+        s.nodes.push(s.nodes[4].clone());
+        assert!(select_dismiss(&mut s, 2).unwrap_err().contains("Ambiguous"));
+        let mut s = dismiss_fixture();
+        s.nodes[4].0.identity.runtime_id.clear();
+        assert!(select_dismiss(&mut s, 2).unwrap_err().contains("identity"));
+    }
+    #[test]
+    fn xaml_context_detects_overlay_disappearance_and_menu_replacement() {
+        let mut s = dismiss_fixture();
+        let original = select_dismiss(&mut s, 2).unwrap().1;
+        s.nodes[6].0.identity.runtime_id.push(999);
+        assert_ne!(original, select_dismiss(&mut s, 2).unwrap().1);
+        s.nodes[2].0.dismiss = false;
+        assert_ne!(original, select_dismiss(&mut s, 2).unwrap().1);
+    }
+    #[test]
+    fn xaml_reconciliation_is_bounded_and_does_not_scan_window_subtrees() {
+        let mut s = dismiss_fixture();
+        for _ in 0..NODE_LIMIT {
+            let mut n = s.nodes[4].clone();
+            n.0.contains = false;
+            s.nodes.push(n);
+        }
+        assert!(select_dismiss(&mut s, 2).unwrap_err().contains("limit"));
+        assert!(!s.enumerated.contains(&0));
+        let mut s = dismiss_fixture();
+        s.nodes[0].1 = Some(1);
+        assert!(select_dismiss(&mut s, 2).unwrap_err().contains("depth"));
     }
     #[test]
     fn menu_overlay_replaces_background_hit_with_focused_offscreen_checkbox() {

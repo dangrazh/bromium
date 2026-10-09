@@ -133,6 +133,18 @@ pub fn resolve_point(
     title: Option<&str>,
     deadline: Instant,
 ) -> Result<Option<(UITree, usize)>, StaleTree> {
+    resolve_point_with_xaml_overlays(service, x, y, title, deadline, true)
+}
+
+/// Logical XAML menu-heading reconciliation can be disabled for provider-hit inspection.
+pub fn resolve_point_with_xaml_overlays(
+    service: &TreeService,
+    x: i32,
+    y: i32,
+    title: Option<&str>,
+    deadline: Instant,
+    resolve_xaml_overlays: bool,
+) -> Result<Option<(UITree, usize)>, StaleTree> {
     let result = resolve_point_with(
         service,
         x,
@@ -147,6 +159,7 @@ pub fn resolve_point(
                 deadline,
                 service.point_capture_context().1,
                 service.point_host_hints(x, y),
+                resolve_xaml_overlays,
             )
         },
     );
@@ -221,7 +234,12 @@ fn resolve_point_with(
                 "Point ancestry has no desktop/window anchor",
             ));
         };
-        let identity = (target.clone(), desktop.clone(), process);
+        let identity = (
+            target.clone(),
+            desktop.clone(),
+            process,
+            discovery.dismiss_context.clone(),
+        );
         if expected_target
             .as_ref()
             .is_some_and(|expected| expected != &identity)
@@ -360,6 +378,7 @@ mod tests {
         let discovery = probe::Discovery {
             partial_parents: vec![],
             diagnostic_id: None,
+            dismiss_context: None,
             path: vec![target, desktop.properties.identity()],
             window: Some((window.properties.clone(), 456)),
             observation,

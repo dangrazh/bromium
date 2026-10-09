@@ -743,18 +743,26 @@ impl WinDriver {
         self.refresh_ui_tree(py, window_title)
     }
 
-    #[pyo3(signature = (x, y, *, verify_xpath=false))]
+    #[pyo3(signature = (x, y, *, verify_xpath=false, resolve_xaml_overlays=true))]
     pub fn get_element_by_coordinates(
         &mut self,
         py: Python<'_>,
         x: i32,
         y: i32,
         verify_xpath: bool,
+        resolve_xaml_overlays: bool,
     ) -> PyResult<Element> {
         let deadline = Instant::now() + Duration::from_millis(self.timeout_ms);
         let found = py
             .allow_threads(|| {
-                uitree::resolve_point(&self.service, x, y, self.window_title.as_deref(), deadline)
+                uitree::resolve_point_with_xaml_overlays(
+                    &self.service,
+                    x,
+                    y,
+                    self.window_title.as_deref(),
+                    deadline,
+                    resolve_xaml_overlays,
+                )
             })
             .map_err(|e| stale_error(py, e))?;
         let (mut tree, mut index) = found.ok_or_else(|| {
