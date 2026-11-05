@@ -16,7 +16,9 @@ The workspace also includes UI Explore, a desktop tree inspector and XPath tool.
 
 Coordinate lookup generates reusable XPath candidates such as
 `/Pane/Window[@Name='resume.txt – Notepad']//Button[@Name='Einstellungen']`.
-It prefers AutomationId, then Name, within a semantic window anchor. No generated
+It prefers a unique nonempty Name, then AutomationId, within a semantic window anchor.
+The same preference applies to the window anchor. AutomationIds can change across
+application restarts (for example in Teams); names can still vary with language or UI state. No generated
 automation locator contains runtime IDs, native handles or `NodeKey`.
 
 ```python
@@ -534,6 +536,20 @@ accepting an arbitrary provider-ID match.
 
 The XML `IdentityStatus` attribute distinguishes `provider` from `snapshot-only`
 occurrences. Public runtime IDs are never fabricated to fill missing IDs.
+
+When coordinate lookup rejects an ancestry element with an empty runtime ID,
+Debug/Trace logging also emits `point_msaa_probe` with the point query ID and
+ancestry depth. It samples the rejected element, its control-view parent, and up
+to 16 immediate children: UIA metadata, legacy MSAA pattern availability, child
+ID, name, role, state, and `IAccessible` availability. Comparisons report canonical
+COM `IUnknown` equality and child-ID equality, plus UIA `CompareElements`, and
+resample the rejected element afterwards. These are diagnostic evidence, not
+proof of a persistent identity; no pointer or child ID becomes a locator.
+The probe issues at most 256 calls, starts no further calls after two seconds or
+the query deadline (whichever comes first), and records errors, skipped reads and
+truncation. An in-flight provider call cannot be interrupted. It does not invoke
+actions, modify the tree, scan the desktop, or change the missing-identity policy.
+No separate tool is needed; enable Debug or Trace logging and repeat the lookup.
 
 Debug `tree_missing_identity` diagnostics report captured ancestry, element name,
 type, native handle, class/framework/provider and original-before, cached, and

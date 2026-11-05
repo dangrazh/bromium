@@ -161,7 +161,7 @@ to see current state again. The paused view is explicitly labelled and does not
 stop Rust's live-cache maintenance. See the [UI Explore guide](crates/uiexplore/README.md).
 
 Python coordinate lookup and UI Explore share reusable XPath generation: semantic
-window anchors, then AutomationId/Name selectors, with structural fallback only
+window anchors, then Name-first selectors (AutomationId as fallback), with structural fallback only
 where siblings were enumerated. Duplicate indistinguishable windows produce an
 explicit error, not a window index or identity-based fallback. UI Explore labels
 unverified candidates and offers opt-in “Verify XPath (full scan)” during cursor

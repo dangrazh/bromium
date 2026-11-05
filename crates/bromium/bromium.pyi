@@ -463,7 +463,8 @@ class WinDriver:
             The exposed element or narrowly reconciled logical target in the
             native window under the point. A logical menu heading may be behind
             a light-dismiss input layer; clicking there can dismiss the menu.
-            A reusable XPath using a semantic window anchor and AutomationId/Name,
+            A reusable XPath using a semantic window anchor and preferring a unique
+            nonempty Name over AutomationId (also for the window anchor),
             with structural fallback where siblings were enumerated. Partial
             coverage yields xpath_status='candidate', explicitly unverified.
             verify_xpath=True yields 'snapshot_unique' or raises an error.

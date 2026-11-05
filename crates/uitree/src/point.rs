@@ -17,6 +17,8 @@ mod host_probe;
 mod menu;
 #[path = "point_mismatch.rs"]
 mod mismatch;
+#[path = "point_msaa_probe.rs"]
+mod msaa_probe;
 #[path = "point_probe.rs"]
 mod probe;
 

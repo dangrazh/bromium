@@ -63,9 +63,11 @@ pub fn get_reusable_locator(
                 .iter()
                 .all(|attr| node.attribute(*attr) == other.attribute(*attr))
     }
+    // Providers such as Teams can regenerate AutomationIds across restarts.
+    // Prefer a unique nonempty Name, retaining AutomationId as a fallback.
     let options: &[&[&str]] = &[
-        &["AutomationId"],
         &["Name"],
+        &["AutomationId"],
         &["AutomationId", "Name"],
         &["Name", "ClassName"],
         &["ClassName", "FrameworkId"],
@@ -428,11 +430,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reusable_xpath_survives_new_process_handles_and_tooltip() {
-        let xml = r#"<Pane NodeKey="desktop"><Window Name="Editor" NodeKey="old-window"><Pane><MenuItem Name="File" AutomationId="FileMenu" NodeKey="old-target"/></Pane></Window></Pane>"#;
+    fn reusable_xpath_survives_new_process_handles_automation_ids_and_tooltip() {
+        let xml = r#"<Pane NodeKey="desktop"><Window Name="Editor" AutomationId="window-session-1" NodeKey="old-window"><Pane><MenuItem Name="File" AutomationId="FileMenu" NodeKey="old-target"/></Pane></Window></Pane>"#;
         let next = xml
             .replace("old-window", "new-window")
             .replace("old-target", "new-target")
+            .replace("window-session-1", "window-session-2")
+            .replace("FileMenu", "FileMenu-session-2")
             .replace(
                 "<Pane><MenuItem",
                 "<Pane Name=\"PopupHost\"/><Pane><MenuItem",
@@ -441,7 +445,7 @@ mod tests {
             get_reusable_locator("old-target", xml, false, &Default::default(), false).unwrap();
         assert_eq!(
             locator.xpath,
-            "/Pane/Window[@Name='Editor']//MenuItem[@AutomationId='FileMenu']"
+            "/Pane/Window[@Name='Editor']//MenuItem[@Name='File']"
         );
         assert!(!locator.snapshot_unique);
         let next_locator =
@@ -454,6 +458,35 @@ mod tests {
         assert!(matches.is_success());
         assert_eq!(matches.get_result_items().len(), 1);
         assert_eq!(matches.get_result_items()[0].get_item_value(), "new-target");
+    }
+
+    #[test]
+    fn reusable_automation_id_fallback_for_missing_empty_or_duplicate_names() {
+        for name in ["", "Name=\"\"", "Name=\"Search\""] {
+            let xml = format!(
+                r#"<Pane><Window AutomationId="app"><Button Name="Search"/><Button {name} AutomationId="search-input" NodeKey="target"/></Window></Pane>"#
+            );
+            let locator =
+                get_reusable_locator("target", &xml, false, &Default::default(), true).unwrap();
+            assert_eq!(
+                locator.xpath,
+                "/Pane/Window[@AutomationId='app']//Button[@AutomationId='search-input']"
+            );
+            assert!(locator.snapshot_unique);
+        }
+    }
+
+    #[test]
+    fn reusable_structural_fallback_prefers_names_and_simple_mode_stays_structural() {
+        let xml = r#"<Pane><Window Name="App" AutomationId="random-window" NodeKey="w"><Pane Name="First" AutomationId="random-pane" NodeKey="p"><Button Name="OK" AutomationId="shared" NodeKey="target"/></Pane><Pane Name="Second"><Button Name="OK" AutomationId="shared"/></Pane></Window></Pane>"#;
+        let complete = ["w".to_string(), "p".to_string()].into_iter().collect();
+        let locator = get_reusable_locator("target", xml, false, &complete, true).unwrap();
+        assert_eq!(
+            locator.xpath,
+            "/Pane/Window[@Name='App']/Pane[@Name='First']/Button[@Name='OK']"
+        );
+        let simple = get_reusable_locator("target", xml, true, &complete, true).unwrap();
+        assert_eq!(simple.xpath, "/Pane/Window[@Name='App']/Pane[1]/Button");
     }
 
     #[test]

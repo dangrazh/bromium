@@ -159,6 +159,7 @@ fn discover(
             occurrence: None,
         };
         if identity.runtime_id.is_empty() {
+            super::msaa_probe::probe(&automation, &element, diagnostic.id, depth, deadline);
             return Err("Point target ancestry has missing provider identity".into());
         }
         log::debug!(

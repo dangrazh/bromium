@@ -66,7 +66,7 @@ still exists.
 
 ## Generated locators
 
-Locators use semantic window anchors and prefer AutomationId/Name descendants,
+Locators prefer a unique nonempty Name over AutomationId for semantic window anchors and descendants,
 avoiding incidental pane indices. No copied locator embeds runtime IDs, handles
 or NodeKey. Partial coverage is explicitly labelled **Candidate — uniqueness not
 verified**. **Simple XPath** prefers structural steps below the semantic window
