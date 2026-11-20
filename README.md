@@ -31,6 +31,12 @@ elements (or handle-less descendants depending on them) raise
 Valid siblings remain available. Debug `tree_missing_identity` records include
 ancestry, provider metadata, and original-versus-cached runtime IDs.
 
+Coordinate lookup can return an identity-less target for locator inspection when
+live UIA comparison uniquely matches it among an identifiable parent's immediate
+children. Membership is revalidated within the query deadline. It remains
+snapshot-only: actions and full-scan locator verification are rejected, and an
+invalidation requires a new lookup rather than retargeting a retry.
+
 Queries validate relevant coverage within a deadline. If coverage remains stale,
 they raise `bromium.StaleTreeError(TimeoutError)` with `reason`, `scope`,
 `revision`, and `coverage`. Stale coverage is not a definitive no-match.

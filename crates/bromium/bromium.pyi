@@ -190,6 +190,15 @@ class Element:
         ...
 
     @property
+    def resolution(self) -> str:
+        """How get_element_by_coordinates located the element: 'point' (bottom-up
+        provider ancestry) or 'point_fallback_scoped' (top-down capture of the
+        window under the point after the bottom-up ancestry failed). Empty for
+        elements found any other way.
+        """
+        ...
+
+    @property
     def handle(self) -> int:
         """The native window handle (HWND) of this element."""
         ...
@@ -446,6 +455,12 @@ class WinDriver:
         shares the query deadline. A popup/window change during lookup raises
         StaleTreeError instead of selecting a control underneath the dismissed menu.
 
+        An identity-less target with an identifiable immediate parent can be
+        returned after unique live UIA sibling comparison and revalidation.
+        It remains snapshot-only: actions are unavailable, its locator is a
+        candidate, and verify_xpath=True raises StaleTreeError without a scan.
+        Invalidation aborts this lookup rather than retrying with a new identity.
+
         Args:
             x: The x screen coordinate.
             y: The y screen coordinate.
@@ -458,6 +473,13 @@ class WinDriver:
                 locator, ignoring window_title only for scan/uniqueness scope.
                 Uses the same timeout_ms deadline, retains the original target,
                 and fails if full coverage or uniqueness cannot be established.
+
+        If the hit's provider ancestry cannot be established bottom-up (missing
+        or ambiguous identity, ancestry not reaching the desktop, repeated
+        invalidation), the top-level window under the point is recaptured
+        top-down within the same timeout_ms and the hit element is relocated
+        there by identity, or by an exact property match if it has none.
+        Element.resolution reports which route was used.
 
         Returns:
             The exposed element or narrowly reconciled logical target in the
@@ -475,7 +497,9 @@ class WinDriver:
             ElementNotFoundError: If no exposed element is found, or the native
                 window under the point is outside the configured title scope.
             StaleTreeError: If relevant coverage cannot be repaired by timeout_ms.
-                Also raised if the hit ancestry has missing/ambiguous identity.
+                Also raised if the hit ancestry has missing/ambiguous identity
+                and the scoped top-down fallback cannot relocate the element;
+                the reason then contains both failures.
                 Full-scan verification also fails if the original target vanishes.
             TreeConstructionError: No reusable selector can be constructed
                 (for example, indistinguishable application windows).

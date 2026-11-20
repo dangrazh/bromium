@@ -29,6 +29,15 @@ verified = driver.get_element_by_coordinates(x, y, verify_xpath=True)
 assert verified.xpath_status == "snapshot_unique"
 ```
 
+If the bottom-up ancestry of the hit fails structurally (missing or ambiguous
+provider identity, ancestry not reaching the desktop, repeated invalidation),
+the lookup falls back to a top-down capture of the top-level window under the
+point, within the same `timeout_ms`, and relocates the hit element there (by
+identity, or by an exact property and bounds match when it has none).
+`element.resolution` is `"point"` or `"point_fallback_scoped"`; fallbacks are
+logged at Info level as `point_fallback`. Deadline expiry and excluded processes
+never fall back.
+
 `verify_xpath=True` scans the entire exposed desktop (not just window_title),
 keeps the original target identity, and fails if it disappears, full coverage
 cannot be obtained, or no unique reusable locator is available. It never silently
@@ -537,6 +546,21 @@ accepting an arbitrary provider-ID match.
 The XML `IdentityStatus` attribute distinguishes `provider` from `snapshot-only`
 occurrences. Public runtime IDs are never fabricated to fill missing IDs.
 
+Coordinate lookup has a narrow fallback for a target with an empty runtime ID
+and zero handle whose immediate parent has resolvable identity. It fully
+enumerates up to 256 immediate siblings and requires exactly one live UIA
+`CompareElements` match. Before publication it repeats the point hit and sibling
+enumeration, verifies parent identity and each sibling's live identity/order and
+captured metadata. Missing/ambiguous matches, provider errors, truncation, changes
+and deadlines fail closed. No whole-window or desktop scan is added.
+The returned element remains snapshot-only and its XPath is an unverified candidate.
+Its actions remain unavailable, even if a later XPath query finds it;
+`verify_xpath=True` raises `StaleTreeError` without starting a full scan, because
+the original identity cannot be pinned across refresh. An invalidation also raises
+`StaleTreeError` rather than retrying with a new snapshot token. Identity-less
+ancestors are not supported by this fallback. Debug logs report
+`point_identityless result=verified_snapshot_only` on successful validation.
+
 When coordinate lookup rejects an ancestry element with an empty runtime ID,
 Debug/Trace logging also emits `point_msaa_probe` with the point query ID and
 ancestry depth. It samples the rejected element, its control-view parent, and up
@@ -565,6 +589,7 @@ child lists.
 | `name` | `str` | The name of the UI element |
 | `xpath` | `str` | The XPath locator for this element |
 | `xpath_status` | `str` | `candidate` (unverified), `snapshot_unique`, `provided`, or `unavailable` |
+| `resolution` | `str` | Coordinate lookups only: `point` (bottom-up) or `point_fallback_scoped` (top-down window capture); empty otherwise |
 | `handle` | `int` | The native window handle (HWND) |
 | `control_type` | `str` | The UI Automation control type (e.g. "Button", "Edit") |
 | `runtime_id` | `list[int]` | The unmodified provider runtime ID; not necessarily unique, even with `handle` |

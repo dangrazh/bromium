@@ -10,6 +10,7 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub(super) struct Discovery {
+    pub compared_snapshot: bool,
     pub diagnostic_id: Option<u64>,
     pub dismiss_context: Option<super::menu::DismissContext>,
     pub path: Vec<ElementIdentity>,
@@ -20,6 +21,44 @@ pub(super) struct Discovery {
     pub partial_parents: Vec<ElementIdentity>,
 }
 
+/// Why bottom-up discovery failed, and whether a scoped top-down capture can recover.
+#[derive(Clone, Debug)]
+pub(super) enum DiscoveryError {
+    /// Deadline, capacity, excluded process or desktop hit: no fallback.
+    Final(String),
+    /// The provider ancestry could not be established bottom-up. `target`
+    /// holds the hit element's properties when they could still be read.
+    Structural {
+        reason: String,
+        target: Option<Box<SaveUIElement>>,
+    },
+}
+impl DiscoveryError {
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Final(reason) | Self::Structural { reason, .. } => reason,
+        }
+    }
+}
+impl std::fmt::Display for DiscoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
+}
+impl From<String> for DiscoveryError {
+    fn from(reason: String) -> Self {
+        Self::Structural {
+            reason,
+            target: None,
+        }
+    }
+}
+impl From<&str> for DiscoveryError {
+    fn from(reason: &str) -> Self {
+        reason.to_owned().into()
+    }
+}
+
 struct Job {
     x: i32,
     y: i32,
@@ -27,7 +66,7 @@ struct Job {
     excluded_process: Option<u32>,
     host_hints: Vec<Vec<ElementIdentity>>,
     resolve_xaml_overlays: bool,
-    result: SyncSender<Result<Discovery, String>>,
+    result: SyncSender<Result<Discovery, DiscoveryError>>,
 }
 
 pub(super) fn ancestors(
@@ -37,10 +76,12 @@ pub(super) fn ancestors(
     excluded_process: Option<u32>,
     host_hints: Vec<Vec<ElementIdentity>>,
     resolve_xaml_overlays: bool,
-) -> Result<Discovery, String> {
+) -> Result<Discovery, DiscoveryError> {
     static QUEUE: OnceLock<SyncSender<Job>> = OnceLock::new();
     if Instant::now() >= deadline {
-        return Err("Point discovery deadline expired".into());
+        return Err(DiscoveryError::Final(
+            "Point discovery deadline expired".into(),
+        ));
     }
     let queue = QUEUE.get_or_init(|| {
         let (tx, rx) = mpsc::sync_channel::<Job>(1);
@@ -59,7 +100,11 @@ pub(super) fn ancestors(
                         job.resolve_xaml_overlays,
                     )
                 })
-                .unwrap_or_else(|_| Err("Point discovery worker panicked".into()));
+                .unwrap_or_else(|_| {
+                    Err(DiscoveryError::Final(
+                        "Point discovery worker panicked".into(),
+                    ))
+                });
                 let _ = job.result.try_send(result);
             }
         });
@@ -76,13 +121,18 @@ pub(super) fn ancestors(
             resolve_xaml_overlays,
             result: tx,
         })
-        .map_err(|_| "Point discovery capacity unavailable")?;
+        .map_err(|_| DiscoveryError::Final("Point discovery capacity unavailable".into()))?;
     rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .map_err(|_| {
-            "Point discovery deadline expired (provider call may still be running)".to_string()
+            DiscoveryError::Final(
+                "Point discovery deadline expired (provider call may still be running)".into(),
+            )
         })?
 }
 
+/// Runs the bottom-up discovery. On a structural failure the reconciled hit
+/// element's properties are read once (only on this failure path), so the
+/// caller can relocate the same target in a scoped top-down capture.
 fn discover(
     x: i32,
     y: i32,
@@ -90,12 +140,58 @@ fn discover(
     excluded_process: Option<u32>,
     host_hints: &[Vec<ElementIdentity>],
     resolve_xaml_overlays: bool,
-) -> Result<Discovery, String> {
+) -> Result<Discovery, DiscoveryError> {
+    let mut hit = None;
+    match discover_spine(
+        x,
+        y,
+        deadline,
+        excluded_process,
+        host_hints,
+        resolve_xaml_overlays,
+        &mut hit,
+    ) {
+        Err(DiscoveryError::Structural {
+            reason,
+            target: None,
+        }) => {
+            let target = hit
+                .filter(|_| Instant::now() < deadline)
+                .and_then(|(automation, element)| target_properties(&automation, &element))
+                .map(Box::new);
+            Err(DiscoveryError::Structural { reason, target })
+        }
+        other => other,
+    }
+}
+
+fn target_properties(
+    automation: &uiautomation::UIAutomation,
+    element: &uiautomation::UIElement,
+) -> Option<SaveUIElement> {
+    let request = crate::capture::cache_request(automation).ok()?;
+    let cached = element.build_updated_cache(&request).ok()?;
+    SaveUIElement::from_cache(&cached)
+        .inspect_err(|e| log::debug!("point_fallback target_properties_failed error={e}"))
+        .ok()
+}
+
+fn discover_spine(
+    x: i32,
+    y: i32,
+    deadline: Instant,
+    excluded_process: Option<u32>,
+    host_hints: &[Vec<ElementIdentity>],
+    resolve_xaml_overlays: bool,
+    hit: &mut Option<(uiautomation::UIAutomation, uiautomation::UIElement)>,
+) -> Result<Discovery, DiscoveryError> {
     let check = || {
         if Instant::now() < deadline {
             Ok(())
         } else {
-            Err("Point discovery deadline expired".to_string())
+            Err(DiscoveryError::Final(
+                "Point discovery deadline expired".into(),
+            ))
         }
     };
     check()?;
@@ -108,7 +204,9 @@ fn discover(
     if let Some(excluded) = excluded_process {
         check()?;
         if element.get_process_id().map_err(|e| e.to_string())? == excluded {
-            return Err("Point target belongs to excluded process".into());
+            return Err(DiscoveryError::Final(
+                "Point target belongs to excluded process".into(),
+            ));
         }
     }
     diagnostic.element("initial_raw", &element, &automation);
@@ -122,7 +220,9 @@ fn discover(
     diagnostic.focus(&automation, excluded_process);
     check()?;
     if excluded_process == Some(element.get_process_id().map_err(|e| e.to_string())?) {
-        return Err("Point target belongs to excluded process".into());
+        return Err(DiscoveryError::Final(
+            "Point target belongs to excluded process".into(),
+        ));
     }
     element = super::menu::reconcile(&automation, element, x, y, deadline)?;
     diagnostic.element("initial_menu_reconciled", &element, &automation);
@@ -142,8 +242,10 @@ fn discover(
         (element, None)
     };
     diagnostic.element("initial_xaml_reconciled", &element, &automation);
+    *hit = Some((automation.clone(), element.clone()));
     let mut path = Vec::new();
     let mut elements = Vec::new();
+    let mut identityless_target = false;
     for depth in 0..64 {
         check()?;
         let runtime_id = element.get_runtime_id().map_err(|e| e.to_string())?;
@@ -159,8 +261,12 @@ fn discover(
             occurrence: None,
         };
         if identity.runtime_id.is_empty() {
-            super::msaa_probe::probe(&automation, &element, diagnostic.id, depth, deadline);
-            return Err("Point target ancestry has missing provider identity".into());
+            if depth == 0 && identity.handle == 0 {
+                identityless_target = true;
+            } else {
+                super::msaa_probe::probe(&automation, &element, diagnostic.id, depth, deadline);
+                return Err("Point target ancestry has missing provider identity".into());
+            }
         }
         log::debug!(
             "point_lookup uia_ancestor_depth={} identity={:?}",
@@ -181,6 +287,35 @@ fn discover(
                     return Err("Point ancestry did not reach the UIA desktop".into());
                 }
                 ElementIdentity::qualify_path(&mut path);
+                let compared = if identityless_target {
+                    if elements.len() < 3 {
+                        return Err("Identity-less point requires an application parent".into());
+                    }
+                    match super::identityless::Capture::acquire(
+                        &automation,
+                        &elements[0],
+                        &elements[1],
+                        &path[1],
+                        deadline,
+                    ) {
+                        Ok(capture) => {
+                            path[0] = capture.target.properties.identity();
+                            Some(capture)
+                        }
+                        Err(error) => {
+                            super::msaa_probe::probe(
+                                &automation,
+                                &elements[0],
+                                diagnostic.id,
+                                0,
+                                deadline,
+                            );
+                            return Err(error.into());
+                        }
+                    }
+                } else {
+                    None
+                };
                 let window = if elements.len() >= 2 {
                     let started = Instant::now();
                     log::debug!(
@@ -212,7 +347,9 @@ fn discover(
                     None
                 };
                 let Some((_, _)) = &window else {
-                    return Err("Point target is the desktop, not a window control".into());
+                    return Err(DiscoveryError::Final(
+                        "Point target is the desktop, not a window control".into(),
+                    ));
                 };
                 let mut capture = excluded_process.map_or_else(
                     crate::capture::UiaCapture::default,
@@ -227,15 +364,19 @@ fn discover(
                     diagnostic.id,
                     path[0]
                 );
-                let target_result = capture.walk(
-                    &automation,
-                    elements[0].clone(),
-                    0,
-                    deadline,
-                    &cancel,
-                    &mut count,
-                    path[0].ancestor.as_deref(),
-                );
+                let target_result = if let Some(compared) = &compared {
+                    Ok(compared.target.clone())
+                } else {
+                    capture.walk(
+                        &automation,
+                        elements[0].clone(),
+                        0,
+                        deadline,
+                        &cancel,
+                        &mut count,
+                        path[0].ancestor.as_deref(),
+                    )
+                };
                 log::debug!(
                     "point_capture_timing query={:?} stage=target_end elapsed_us={} error={:?}",
                     diagnostic.id,
@@ -261,6 +402,12 @@ fn discover(
                 // This is also the membership evidence needed for positional locators.
                 for i in 1..elements.len() - 1 {
                     check()?;
+                    if i == 1
+                        && let Some(compared) = &compared
+                    {
+                        observation = compared.parent.clone();
+                        continue;
+                    }
                     let started = Instant::now();
                     log::debug!(
                         "point_capture_timing query={:?} stage=parent_begin depth={} identity={:?} remaining_ms={}",
@@ -345,7 +492,9 @@ fn discover(
                 if let Some(excluded) = excluded_process {
                     check()?;
                     if hit.get_process_id().map_err(|e| e.to_string())? == excluded {
-                        return Err("Point verification target belongs to excluded process".into());
+                        return Err(DiscoveryError::Final(
+                            "Point verification target belongs to excluded process".into(),
+                        ));
                     }
                 }
                 diagnostic.element("verification_raw", &hit, &automation);
@@ -374,7 +523,9 @@ fn discover(
                     );
                 }
                 diagnostic.element("verification_xaml_reconciled", &hit, &automation);
-                if !path[0].matches_live(&hit) {
+                if let Some(compared) = &compared {
+                    compared.verify(&automation, &hit, &elements[1], deadline)?;
+                } else if !path[0].matches_live(&hit) {
                     return Err("Point target changed during narrow capture".into());
                 }
                 // A positive-only popup edge must remain attached to the same
@@ -399,6 +550,7 @@ fn discover(
                     path.first()
                 );
                 return Ok(Discovery {
+                    compared_snapshot: compared.is_some(),
                     diagnostic_id: diagnostic.id,
                     dismiss_context,
                     path,
@@ -407,7 +559,7 @@ fn discover(
                     partial_parents,
                 });
             }
-            Err(e) => return Err(format!("Point ancestry failed: {e}")),
+            Err(e) => return Err(format!("Point ancestry failed: {e}").into()),
         }
     }
     Err("Point ancestry depth limit exceeded".into())
@@ -582,10 +734,19 @@ mod tests {
     }
     #[test]
     fn expired_point_discovery_does_not_start_provider_work() {
+        let error = ancestors(0, 0, Instant::now(), None, vec![], true).unwrap_err();
+        assert!(error.reason().contains("deadline"));
         assert!(
-            ancestors(0, 0, Instant::now(), None, vec![], true)
-                .unwrap_err()
-                .contains("deadline")
+            matches!(error, DiscoveryError::Final(_)),
+            "an expired deadline must never trigger the scoped fallback"
         );
+    }
+    #[test]
+    fn plain_errors_are_structural_without_target() {
+        let error = DiscoveryError::from("Point ancestry did not reach the UIA desktop");
+        assert!(matches!(
+            error,
+            DiscoveryError::Structural { target: None, .. }
+        ));
     }
 }

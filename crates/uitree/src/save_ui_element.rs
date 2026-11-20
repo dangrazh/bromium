@@ -151,8 +151,19 @@ impl SaveUIElement {
         }
     }
     #[cfg(test)]
+    pub(crate) fn without_provider_identity(mut self) -> Self {
+        self.runtime_id.clear();
+        self.handle = 0;
+        self
+    }
+    #[cfg(test)]
     pub(crate) fn with_handle(mut self, handle: isize) -> Self {
         self.handle = handle;
+        self
+    }
+    #[cfg(test)]
+    pub(crate) fn with_runtime_id(mut self, runtime_id: Vec<i32>) -> Self {
+        self.runtime_id = runtime_id;
         self
     }
     #[cfg(test)]

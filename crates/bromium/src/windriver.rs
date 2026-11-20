@@ -139,6 +139,7 @@ pub struct Element {
     name: String,
     xpath: String,
     xpath_status: String,
+    resolution: String,
     handle: isize,
     control_type: String,
     runtime_id: Vec<i32>,
@@ -174,6 +175,7 @@ impl Element {
             name,
             xpath,
             xpath_status: "provided".into(),
+            resolution: String::new(),
             handle,
             control_type,
             runtime_id,
@@ -238,6 +240,14 @@ impl Element {
     #[getter]
     pub fn xpath_status(&self) -> &str {
         &self.xpath_status
+    }
+
+    /// How get_element_by_coordinates located this element: "point" (bottom-up
+    /// ancestry) or "point_fallback_scoped" (top-down capture of the window under
+    /// the point). Empty for elements found any other way.
+    #[getter]
+    pub fn resolution(&self) -> &str {
+        &self.resolution
     }
 
     /// The native window handle (HWND) of this element.
@@ -345,6 +355,7 @@ impl Default for Element {
             name: String::new(),
             xpath: String::new(),
             xpath_status: "unavailable".into(),
+            resolution: String::new(),
             handle: 0,
             control_type: String::new(),
             service: None,
@@ -755,7 +766,7 @@ impl WinDriver {
         let deadline = Instant::now() + Duration::from_millis(self.timeout_ms);
         let found = py
             .allow_threads(|| {
-                uitree::resolve_point_with_xaml_overlays(
+                uitree::resolve_point_with_fallback(
                     &self.service,
                     x,
                     y,
@@ -765,7 +776,11 @@ impl WinDriver {
                 )
             })
             .map_err(|e| stale_error(py, e))?;
-        let (mut tree, mut index) = found.ok_or_else(|| {
+        let uitree::PointHit {
+            mut tree,
+            mut index,
+            route,
+        } = found.ok_or_else(|| {
             ElementNotFoundError::logged_err(format!(
                 "No exposed UIA element at ({x}, {y}) within scope {:?}",
                 self.window_title
@@ -779,6 +794,7 @@ impl WinDriver {
         }
         self.ui_tree = tree;
         let mut result = Self::element_from_save_ui(self.ui_tree.node(index).1);
+        result.resolution = route.as_str().into();
         let locator = self
             .ui_tree
             .get_reusable_locator(index, false)

@@ -9,10 +9,14 @@ use windows::Win32::{
 };
 #[path = "point_diagnostics.rs"]
 mod diagnostics;
+#[path = "point_fallback.rs"]
+mod fallback;
 #[path = "point_host.rs"]
 mod host;
 #[path = "point_host_probe.rs"]
 mod host_probe;
+#[path = "point_identityless.rs"]
+mod identityless;
 #[path = "point_menu.rs"]
 mod menu;
 #[path = "point_mismatch.rs"]
@@ -147,12 +151,74 @@ pub fn resolve_point_with_xaml_overlays(
     deadline: Instant,
     resolve_xaml_overlays: bool,
 ) -> Result<Option<(UITree, usize)>, StaleTree> {
-    let result = resolve_point_with(
+    resolve_point_routed(service, x, y, title, deadline, resolve_xaml_overlays, false)
+        .map(|found| found.map(|hit| (hit.tree, hit.index)))
+}
+
+/// How a coordinate query located its element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointRoute {
+    /// Bottom-up: hit test, then the provider's parent chain to the desktop.
+    BottomUp,
+    /// Bottom-up failed structurally; the top-level window under the point was
+    /// recaptured top-down and the hit element relocated in that capture.
+    ScopedFallback,
+}
+impl PointRoute {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BottomUp => "point",
+            Self::ScopedFallback => "point_fallback_scoped",
+        }
+    }
+}
+impl std::fmt::Display for PointRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A resolved coordinate query: the published tree, the element's index and the route used.
+#[derive(Debug, Clone)]
+pub struct PointHit {
+    pub tree: UITree,
+    pub index: usize,
+    pub route: PointRoute,
+}
+
+/// Like [`resolve_point_with_xaml_overlays`], but when the bottom-up ancestry
+/// fails structurally (missing provider identity, ancestry not reaching the
+/// desktop, conflicting or ambiguous cached ancestry, repeated invalidation),
+/// the top-level window under the point is recaptured top-down and the hit
+/// element is relocated there. The fallback costs a whole-window walk on the
+/// single capture worker, so it is meant for one-shot queries, not hover tracking.
+pub fn resolve_point_with_fallback(
+    service: &TreeService,
+    x: i32,
+    y: i32,
+    title: Option<&str>,
+    deadline: Instant,
+    resolve_xaml_overlays: bool,
+) -> Result<Option<PointHit>, StaleTree> {
+    resolve_point_routed(service, x, y, title, deadline, resolve_xaml_overlays, true)
+}
+
+fn resolve_point_routed(
+    service: &TreeService,
+    x: i32,
+    y: i32,
+    title: Option<&str>,
+    deadline: Instant,
+    resolve_xaml_overlays: bool,
+    allow_fallback: bool,
+) -> Result<Option<PointHit>, StaleTree> {
+    let result = resolve_point_or_fallback(
         service,
         x,
         y,
         title,
         deadline,
+        allow_fallback,
         || native_point(x, y),
         || {
             probe::ancestors(
@@ -187,17 +253,97 @@ pub fn resolve_point_with_xaml_overlays(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn resolve_point_or_fallback(
+    service: &TreeService,
+    x: i32,
+    y: i32,
+    title: Option<&str>,
+    deadline: Instant,
+    allow_fallback: bool,
+    native_read: impl FnMut() -> Option<NativePoint>,
+    ancestry: impl FnMut() -> Result<probe::Discovery, probe::DiscoveryError>,
+) -> Result<Option<PointHit>, StaleTree> {
+    let failure = match resolve_point_attempt(service, x, y, title, deadline, native_read, ancestry)
+    {
+        Ok(found) => {
+            return Ok(found.map(|(tree, index)| PointHit {
+                tree,
+                index,
+                route: PointRoute::BottomUp,
+            }));
+        }
+        Err(failure) => failure,
+    };
+    let (Some(hint), true) = (failure.fallback, allow_fallback) else {
+        return Err(failure.stale);
+    };
+    let started = Instant::now();
+    let result = fallback::scoped(service, x, y, title, deadline, &hint);
+    log::info!(
+        "point_fallback x={} y={} reason={:?} window_class={:?} target_type={:?} target_name={:?} elapsed_ms={} outcome={}",
+        x,
+        y,
+        failure.stale.reason,
+        hint.native.class,
+        hint.target.get_control_type(),
+        hint.target.get_name(),
+        started.elapsed().as_millis(),
+        match &result {
+            Ok(Some(_)) => "found".to_owned(),
+            Ok(None) => "outside_scope".to_owned(),
+            Err(error) => format!("failed: {error}"),
+        }
+    );
+    match result {
+        Ok(found) => Ok(found.map(|(tree, index)| PointHit {
+            tree,
+            index,
+            route: PointRoute::ScopedFallback,
+        })),
+        Err(error) => Err(StaleTree {
+            reason: format!("{}; scoped fallback failed: {error}", failure.stale.reason),
+            revision: service.revision(),
+            ..failure.stale
+        }),
+    }
+}
+
+/// A bottom-up failure, carrying what a scoped fallback needs when it applies.
+struct PointFailure {
+    stale: StaleTree,
+    fallback: Option<Box<fallback::Hint>>,
+}
+
+#[cfg(test)]
 fn resolve_point_with(
     service: &TreeService,
     _x: i32,
     _y: i32,
     title: Option<&str>,
     deadline: Instant,
-    mut native_read: impl FnMut() -> Option<NativePoint>,
-    mut ancestry: impl FnMut() -> Result<probe::Discovery, String>,
+    native_read: impl FnMut() -> Option<NativePoint>,
+    ancestry: impl FnMut() -> Result<probe::Discovery, probe::DiscoveryError>,
 ) -> Result<Option<(UITree, usize)>, StaleTree> {
+    resolve_point_attempt(service, _x, _y, title, deadline, native_read, ancestry)
+        .map_err(|f| f.stale)
+}
+
+fn resolve_point_attempt(
+    service: &TreeService,
+    x: i32,
+    y: i32,
+    title: Option<&str>,
+    deadline: Instant,
+    mut native_read: impl FnMut() -> Option<NativePoint>,
+    mut ancestry: impl FnMut() -> Result<probe::Discovery, probe::DiscoveryError>,
+) -> Result<Option<(UITree, usize)>, PointFailure> {
+    let fail = |reason: &str| PointFailure {
+        stale: stale(service, title, reason),
+        fallback: None,
+    };
     if Instant::now() >= deadline {
-        return Err(stale(service, title, "Coordinate query deadline expired"));
+        return Err(fail("Coordinate query deadline expired"));
     }
     let Some(native) = native_read() else {
         return Ok(None);
@@ -205,36 +351,39 @@ fn resolve_point_with(
     let mut expected_target = None;
     for attempt in 1..=3 {
         if Instant::now() >= deadline {
-            return Err(stale(service, title, "Coordinate query deadline expired"));
+            return Err(fail("Coordinate query deadline expired"));
         }
         if native_read().as_ref() != Some(&native) {
-            return Err(stale(
-                service,
-                title,
-                "Native popup/window changed during coordinate query",
-            ));
+            return Err(fail("Native popup/window changed during coordinate query"));
         }
         let (epoch, _) = service.point_capture_context();
         log::debug!("point_lookup route=narrow_uia_spine native={:?}", native);
-        let discovery = ancestry().map_err(|e| stale(service, title, e))?;
+        let discovery = ancestry().map_err(|error| {
+            let reason = error.reason().to_owned();
+            PointFailure {
+                stale: stale(service, title, reason),
+                fallback: match error {
+                    probe::DiscoveryError::Structural {
+                        target: Some(target),
+                        ..
+                    } => Some(Box::new(fallback::Hint {
+                        target: *target,
+                        native: native.clone(),
+                    })),
+                    _ => None,
+                },
+            }
+        })?;
         let diagnostic_id = discovery.diagnostic_id;
         if native_read().as_ref() != Some(&native) {
-            return Err(stale(
-                service,
-                title,
-                "Native popup/window changed during coordinate query",
-            ));
+            return Err(fail("Native popup/window changed during coordinate query"));
         }
         let (Some(target), Some(desktop), Some((_, process))) = (
             discovery.path.first(),
             discovery.path.last(),
             discovery.window,
         ) else {
-            return Err(stale(
-                service,
-                title,
-                "Point ancestry has no desktop/window anchor",
-            ));
+            return Err(fail("Point ancestry has no desktop/window anchor"));
         };
         let identity = (
             target.clone(),
@@ -246,13 +395,20 @@ fn resolve_point_with(
             .as_ref()
             .is_some_and(|expected| expected != &identity)
         {
-            return Err(stale(
-                service,
-                title,
-                "Point target changed during invalidation retry",
-            ));
+            return Err(fail("Point target changed during invalidation retry"));
         }
         expected_target = Some(identity);
+        // Kept for a scoped fallback if publication fails structurally.
+        let target_properties = find_properties(&discovery.observation, target).cloned();
+        let structural = |reason: String| PointFailure {
+            stale: stale(service, title, reason),
+            fallback: target_properties.clone().map(|target| {
+                Box::new(fallback::Hint {
+                    target,
+                    native: native.clone(),
+                })
+            }),
+        };
         let (tree, id) = match service.publish_point_partial(
             desktop,
             discovery.observation,
@@ -261,12 +417,15 @@ fn resolve_point_with(
             epoch,
             deadline,
             &discovery.partial_parents,
+            discovery.compared_snapshot,
         ) {
             Ok(result) => result,
             Err(crate::service::PointPublishError::Invalidated) => {
                 let delay = std::time::Duration::from_millis(25 * attempt);
-                let retry =
-                    attempt < 3 && deadline.saturating_duration_since(Instant::now()) > delay;
+                // A snapshot token cannot pin a target across a new acquisition.
+                let retry = !discovery.compared_snapshot
+                    && attempt < 3
+                    && deadline.saturating_duration_since(Instant::now()) > delay;
                 log::debug!(
                     "point_retry attempt={} max_attempts=3 retry={} query={:?} target={:?} reason=invalidated remaining_ms={}",
                     attempt,
@@ -278,24 +437,36 @@ fn resolve_point_with(
                         .as_millis()
                 );
                 if !retry {
-                    return Err(stale(
-                        service,
-                        title,
+                    return Err(structural(
                         crate::service::PointPublishError::Invalidated.to_string(),
                     ));
                 }
                 std::thread::sleep(delay);
                 continue;
             }
-            Err(error) => return Err(stale(service, title, error.to_string())),
+            Err(error) => return Err(structural(error.to_string())),
         };
         if !in_scope(&tree, id, &native, title) {
             return Ok(None);
         }
-        diagnostics::snapshot(&tree, id, _x, _y, diagnostic_id);
+        diagnostics::snapshot(&tree, id, x, y, diagnostic_id);
         return Ok(Some((tree, id)));
     }
     unreachable!("last invalidated attempt returns an error")
+}
+
+fn find_properties<'a>(
+    observation: &'a crate::Observation,
+    identity: &crate::ElementIdentity,
+) -> Option<&'a crate::SaveUIElement> {
+    if &observation.properties.identity() == identity {
+        return Some(&observation.properties);
+    }
+    observation
+        .children
+        .iter()
+        .flatten()
+        .find_map(|child| find_properties(child, identity))
 }
 
 fn element_in_region(tree: &UITree, window: usize, x: i32, y: i32) -> Option<&UIElementInTree> {
@@ -378,6 +549,7 @@ mod tests {
             .properties
             .identity();
         let discovery = probe::Discovery {
+            compared_snapshot: false,
             partial_parents: vec![],
             diagnostic_id: None,
             dismiss_context: None,
@@ -406,6 +578,29 @@ mod tests {
             },
         )
     }
+    #[test]
+    fn compared_snapshot_does_not_retry_after_invalidation() {
+        let (service, mut discovery, native) = fixture();
+        discovery.compared_snapshot = true;
+        let window = service.snapshot().index_for_id(&[42, 2]).unwrap();
+        let mut attempts = 0;
+        let result = resolve_point_with(
+            &service,
+            10,
+            10,
+            None,
+            Instant::now() + std::time::Duration::from_secs(2),
+            || Some(native.clone()),
+            || {
+                attempts += 1;
+                service.invalidate(window, crate::capture::CaptureKind::Subtree);
+                Ok(discovery.clone())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
+    }
+
     #[test]
     fn office_narrow_point_succeeds_while_unrelated_capture_remains_dirty() {
         let (service, discovery, native) = fixture();
@@ -791,5 +986,163 @@ mod tests {
         assert_ne!(selected[0], selected[1]);
         let set: std::collections::HashSet<_> = selected.into_iter().collect();
         assert_eq!(set.len(), 2);
+    }
+
+    /// Serves the Outlook window from `fixture()` for scoped region requests.
+    struct OutlookCapture;
+    impl crate::capture::Capture for OutlookCapture {
+        fn capture(
+            &mut self,
+            request: &crate::capture::CaptureRequest,
+            _: &std::sync::atomic::AtomicBool,
+        ) -> Result<Observation, String> {
+            let window = node(
+                2,
+                "Outlook",
+                "Window",
+                222,
+                vec![node(
+                    3,
+                    "Ribbon",
+                    "Pane",
+                    0,
+                    vec![node(4, "Settings", "Button", 0, vec![])],
+                )],
+            );
+            Ok(match request.kind {
+                crate::capture::CaptureKind::Subtree => window,
+                _ => node(1, "Desktop", "Pane", 1, vec![window]),
+            })
+        }
+    }
+    fn fallback_service() -> TreeService {
+        TreeService::with_capture(
+            UITree::from_observation(node(
+                1,
+                "Desktop",
+                "Pane",
+                1,
+                vec![node(2, "Outlook", "Window", 222, vec![])],
+            ))
+            .unwrap(),
+            || OutlookCapture,
+        )
+    }
+    fn structural_with_target() -> probe::DiscoveryError {
+        probe::DiscoveryError::Structural {
+            reason: "Point target ancestry has missing provider identity".into(),
+            target: Some(Box::new(
+                SaveUIElement::fixture(4, "Settings", "Button").with_rectangle(0, 0, 100, 100),
+            )),
+        }
+    }
+
+    #[test]
+    fn structural_failure_falls_back_to_scoped_capture() {
+        let (_, _, native) = fixture();
+        let service = fallback_service();
+        let hit = resolve_point_or_fallback(
+            &service,
+            10,
+            10,
+            Some("Outlook"),
+            Instant::now() + std::time::Duration::from_secs(5),
+            true,
+            || Some(native.clone()),
+            || Err(structural_with_target()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(hit.route, PointRoute::ScopedFallback);
+        assert_eq!(hit.tree.node(hit.index).1.get_name(), "Settings");
+    }
+
+    #[test]
+    fn fallback_is_not_attempted_when_disabled_or_final() {
+        let (_, _, native) = fixture();
+        let service = fallback_service();
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let revision = service.revision();
+        let disabled = resolve_point_or_fallback(
+            &service,
+            10,
+            10,
+            None,
+            deadline,
+            false,
+            || Some(native.clone()),
+            || Err(structural_with_target()),
+        )
+        .unwrap_err();
+        assert!(!disabled.reason.contains("fallback"), "{}", disabled.reason);
+        let final_error = resolve_point_or_fallback(
+            &service,
+            10,
+            10,
+            None,
+            deadline,
+            true,
+            || Some(native.clone()),
+            || {
+                Err(probe::DiscoveryError::Final(
+                    "Point target belongs to excluded process".into(),
+                ))
+            },
+        )
+        .unwrap_err();
+        assert!(final_error.reason.contains("excluded"));
+        assert!(!final_error.reason.contains("fallback"));
+        assert_eq!(service.revision(), revision, "no capture was published");
+    }
+
+    #[test]
+    fn failed_fallback_keeps_the_original_reason() {
+        let (_, _, native) = fixture();
+        let service = fallback_service();
+        let error = resolve_point_or_fallback(
+            &service,
+            10,
+            10,
+            None,
+            Instant::now() + std::time::Duration::from_secs(5),
+            true,
+            || Some(native.clone()),
+            || {
+                Err(probe::DiscoveryError::Structural {
+                    reason: "Point ancestry did not reach the UIA desktop".into(),
+                    target: Some(Box::new(
+                        SaveUIElement::fixture(99, "Gone", "Button").with_rectangle(0, 0, 100, 100),
+                    )),
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .reason
+                .starts_with("Point ancestry did not reach the UIA desktop"),
+            "{}",
+            error.reason
+        );
+        assert!(error.reason.contains("scoped fallback failed"));
+    }
+
+    #[test]
+    fn successful_bottom_up_reports_its_route() {
+        let (service, discovery, native) = fixture();
+        let hit = resolve_point_or_fallback(
+            &service,
+            10,
+            10,
+            None,
+            Instant::now() + std::time::Duration::from_secs(2),
+            true,
+            || Some(native.clone()),
+            || Ok(discovery.clone()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(hit.route, PointRoute::BottomUp);
+        assert_eq!(hit.tree.node(hit.index).1.get_name(), "Settings");
     }
 }

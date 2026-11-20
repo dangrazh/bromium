@@ -152,6 +152,10 @@ impl TreeService {
         let s = self.shared.state.lock().unwrap();
         (s.epoch, s.excluded_process)
     }
+    /// The unique cached node for a native window handle, read under the lock without cloning the tree.
+    pub(crate) fn region_for_handle(&self, handle: isize) -> Option<usize> {
+        crate::point::cached_region(&self.shared.state.lock().unwrap().tree, handle)
+    }
     pub(crate) fn point_host_hints(&self, x: i32, y: i32) -> Vec<Vec<crate::ElementIdentity>> {
         crate::point::cached_host_hints(&self.shared.state.lock().unwrap().tree, x, y)
     }
@@ -176,6 +180,7 @@ impl TreeService {
             started_epoch,
             deadline,
             &[],
+            false,
         )
     }
 
@@ -189,6 +194,7 @@ impl TreeService {
         started_epoch: u64,
         deadline: Instant,
         partial_parents: &[crate::ElementIdentity],
+        compared_snapshot: bool,
     ) -> Result<(UITree, usize), PointPublishError> {
         let mut s = self.shared.state.lock().unwrap();
         if Instant::now() >= deadline {
@@ -265,7 +271,9 @@ impl TreeService {
             .index_for_identity(target)
             .filter(|&id| candidate.is_descendant(id, window))
             .ok_or("Point target is missing or ambiguous in the captured ancestry")?;
-        if !candidate.node(index).1.identity().is_resolvable() {
+        if !candidate.node(index).1.identity().is_resolvable()
+            && !(compared_snapshot && target.runtime_id.is_empty() && target.occurrence.is_some())
+        {
             return Err("Point target has snapshot-only identity".into());
         }
         if Instant::now() >= deadline {
@@ -481,6 +489,14 @@ impl TreeService {
         identity: &crate::ElementIdentity,
         deadline: Instant,
     ) -> Result<(UITree, usize), StaleTree> {
+        if !identity.is_resolvable() {
+            return Err(StaleTree {
+                reason: "Snapshot-only locator target cannot be pinned across a full scan".into(),
+                scope: None,
+                revision: self.snapshot().revision(),
+                coverage: "reusable locator verification".into(),
+            });
+        }
         let tree = self.refresh(None, deadline)?;
         let fail = |reason: String| StaleTree {
             reason,
@@ -1432,6 +1448,70 @@ mod tests {
     }
 
     #[test]
+    fn compared_point_snapshot_can_generate_locator_but_never_resolve_actions() {
+        let service = TreeService::with_capture(
+            UITree::from_observation(obs(1, Some(vec![obs(2, None)]))).unwrap(),
+            || Fake {
+                calls: Arc::default(),
+                delay: Duration::ZERO,
+            },
+        );
+        let mut props =
+            SaveUIElement::fixture(3, "Static Data", "Menu").without_provider_identity();
+        props.mark_snapshot_only();
+        let mut window = obs(
+            2,
+            Some(vec![Observation {
+                properties: props,
+                children: None,
+            }]),
+        );
+        window.qualify(None);
+        let target = window.children.as_ref().unwrap()[0].properties.identity();
+        let desktop = service.snapshot().node(0).1.identity();
+        assert!(
+            service
+                .publish_point_partial(
+                    &desktop,
+                    window.clone(),
+                    &target,
+                    456,
+                    0,
+                    Instant::now() + Duration::from_secs(2),
+                    &[],
+                    false,
+                )
+                .is_err(),
+            "ordinary publication must still reject snapshot-only targets"
+        );
+        let (tree, index) = service
+            .publish_point_partial(
+                &desktop,
+                window,
+                &target,
+                456,
+                0,
+                Instant::now() + Duration::from_secs(2),
+                &[],
+                true,
+            )
+            .unwrap();
+        assert!(!tree.node(index).1.identity().is_resolvable());
+        assert!(tree.get_reusable_locator(index, false).is_ok());
+        assert!(service.live_request(&[], Some(index)).is_err());
+        assert!(
+            service
+                .verify_locator(&target, Instant::now() + Duration::from_secs(2))
+                .unwrap_err()
+                .reason
+                .contains("cannot be pinned")
+        );
+        let locator = tree.get_reusable_locator(index, false).unwrap();
+        assert!(locator.xpath.ends_with("//Menu[@Name='Static Data']"));
+        assert!(!locator.snapshot_unique);
+    }
+
+    #[test]
     fn point_partial_publication_never_certifies_membership() {
         let service = TreeService::with_capture(
             UITree::from_observation(obs(1, Some(vec![obs(2, None)]))).unwrap(),
@@ -1465,6 +1545,7 @@ mod tests {
                 0,
                 Instant::now() + Duration::from_secs(2),
                 &[parent.clone()],
+                false,
             )
             .unwrap();
         let window_id = tree.index_for_identity(&parent).unwrap();

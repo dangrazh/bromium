@@ -66,6 +66,11 @@ still exists.
 
 ## Generated locators
 
+Coordinate tracking shares Python's bounded identity-less target fallback: unique
+live sibling comparison under an identifiable parent, followed by revalidation.
+Such targets are snapshot-only and their locators remain candidates; full-scan
+verification cannot pin them and reports an error instead of retargeting.
+
 Locators prefer a unique nonempty Name over AutomationId for semantic window anchors and descendants,
 avoiding incidental pane indices. No copied locator embeds runtime IDs, handles
 or NodeKey. Partial coverage is explicitly labelled **Candidate — uniqueness not
